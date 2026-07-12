@@ -12,6 +12,7 @@ import typer
 from . import config
 from .candidate import CandidateError, CandidateStore, approve, draft_from_families, reject
 from .capture import EventLog
+from .doctor import check_registry
 from .evallite import EvalError, eval_lite
 from .gate import InstructionGateError, scan_skill_md
 from .hooks import hooks_settings
@@ -186,6 +187,26 @@ def rollback(
         typer.echo(str(e), err=True)
         raise typer.Exit(1) from e
     typer.echo(f"rolled back {skill_id} -> {to}; materialized {dest}")
+
+
+@app.command()
+def doctor() -> None:
+    """Check registry integrity (read-only): hashes, pointers, host sync.
+
+    Exits 1 if any integrity error is found; warnings (drift/cosmetic) do not.
+    Fixes are yours to run — `rollback`, `seed`, or re-materialize."""
+    reg = _registry()
+    issues = check_registry(reg, config.host_skills_dir())
+    if not issues:
+        typer.echo("doctor: OK — registry consistent, host in sync")
+        return
+    errors = [i for i in issues if i.severity == "error"]
+    for i in issues:
+        mark = "✗" if i.severity == "error" else "!"
+        typer.echo(f"  {mark} [{i.severity}] {i.skill_id}: {i.message}")
+    typer.echo(f"doctor: {len(errors)} error(s), {len(issues) - len(errors)} warning(s)")
+    if errors:
+        raise typer.Exit(1)
 
 
 @app.command("hooks-config")
