@@ -172,3 +172,16 @@ def test_candidate_approve_blocked_by_gate_cli(env):
     assert r.exit_code == 1
     assert "gate blocked" in r.output
     assert not (host / cid).exists()  # never materialized
+
+
+def test_hooks_config_cli(env):
+    import json as _json
+
+    r = runner.invoke(app, ["hooks-config"])
+    assert r.exit_code == 0
+    json_text = r.output.split("\n#", 1)[0]  # drop the trailing merge-note comment
+    parsed = _json.loads(json_text)
+    assert set(parsed["hooks"]) == {
+        "SessionStart", "UserPromptSubmit", "Stop", "SessionEnd", "PreToolUse", "PostToolUse",
+    }
+    assert "capture" in parsed["hooks"]["Stop"][0]["hooks"][0]["command"]
