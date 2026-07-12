@@ -3,6 +3,17 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic versioning.
 
+## [0.4.0] - 2026-07-12
+
+Hardens the v1 package manager.
+
+### Added
+- **`doctor`** — read-only registry integrity check. Re-hashes every stored
+  version against the `artifact_hash` recorded at promotion (catching tampering,
+  corruption, or a hand-edit that bypassed the registry), checks the active
+  pointer resolves, and reports host drift. Exits 1 on an integrity error;
+  remediation (`rollback` / `seed` / re-approve) is left to the user.
+
 ## [0.3.0] - 2026-07-12
 
 Closes out the walking skeleton: `candidate approve` now runs two hard gates
