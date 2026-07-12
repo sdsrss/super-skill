@@ -1,0 +1,199 @@
+"""Candidate approval loop (WS second half, docs/03: mine -> draft -> approve).
+
+A *candidate* is a proposed skill drafted from a mined OpportunityFamily. It is
+pre-promotion scratch: it lives under ``candidates/`` (git-ignored by the
+registry) and is human-editable. Nothing reaches the production skill set until
+``approve`` — the single write path that runs ``registry.add_version`` +
+``materialize`` (git commit + copy to host). This preserves the One Writer Rule:
+candidate -> gate (human approve) -> promote, never bypassed.
+"""
+
+from __future__ import annotations
+
+import re
+from datetime import datetime
+from pathlib import Path
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from . import config
+from .mine import OpportunityFamily
+from .registry import Registry
+from .schemas import (
+    CandidateType,
+    Provenance,
+    ProvenanceKind,
+    SkillStatus,
+    SkillVersion,
+    utcnow,
+)
+from .skillmd import parse
+
+_SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+
+def slugify(label: str) -> str:
+    """Reduce a family label to an agentskills.io-legal skill name (may be empty;
+    callers skip empties). Matches NAME_RE: lowercase alnum + single hyphens."""
+    return _SLUG_RE.sub("-", label.lower()).strip("-")[:64].strip("-")
+
+
+class CandidateError(RuntimeError):
+    pass
+
+
+class Candidate(BaseModel):
+    """Persisted metadata for one drafted candidate (SKILL.md stored alongside)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    candidate_id: str
+    family_label: str
+    session_count: int
+    event_count: int
+    projects: list[str] = Field(default_factory=list)
+    status: str = "pending"  # pending | approved | rejected
+    skill_id: str | None = None
+    version: str | None = None
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+def _draft_md(cand_id: str, fam: OpportunityFamily) -> str:
+    """A stub SKILL.md the human is expected to edit before approving. WS coarse
+    mining can name a recurring family, not write its procedure — so we scaffold
+    honestly and leave TODOs rather than fabricate steps."""
+    return (
+        f"---\n"
+        f"name: {cand_id}\n"
+        f'description: Recurring workflow around "{fam.label}" '
+        f"(seen in {fam.session_count} sessions). EDIT before approving.\n"
+        f"---\n"
+        f"# {fam.label}\n\n"
+        f"<!-- WS draft mined from {fam.session_count} sessions"
+        f"{f', {len(fam.projects)} projects' if fam.projects else ''}. "
+        f"Replace the TODOs with the real reusable procedure, then `candidate approve`. -->\n\n"
+        f"## When to use\n\n"
+        f"TODO: the trigger you hit repeatedly.\n\n"
+        f"## Steps\n\n"
+        f"TODO: the procedure you re-derived each time.\n"
+    )
+
+
+class CandidateStore:
+    """Filesystem store for draft candidates under ``<root>/candidates/<id>/``."""
+
+    def __init__(self, root: Path | None = None) -> None:
+        self.root = root or config.state_root()
+        self.dir = self.root / "candidates"
+
+    def _cdir(self, cand_id: str) -> Path:
+        return self.dir / cand_id
+
+    def get(self, cand_id: str) -> Candidate | None:
+        meta = self._cdir(cand_id) / "candidate.json"
+        if not meta.exists():
+            return None
+        return Candidate.model_validate_json(meta.read_text(encoding="utf-8"))
+
+    def list(self) -> list[Candidate]:
+        if not self.dir.exists():
+            return []
+        out = [self.get(d.name) for d in sorted(self.dir.iterdir()) if d.is_dir()]
+        return [c for c in out if c is not None]
+
+    def skill_md(self, cand_id: str) -> str:
+        md = self._cdir(cand_id) / "SKILL.md"
+        if not md.exists():
+            raise CandidateError(f"candidate {cand_id!r} has no SKILL.md")
+        return md.read_text(encoding="utf-8")
+
+    def write_skill_md(self, cand_id: str, raw: str) -> None:
+        self._cdir(cand_id).mkdir(parents=True, exist_ok=True)
+        (self._cdir(cand_id) / "SKILL.md").write_text(raw, encoding="utf-8")
+
+    def save(self, cand: Candidate) -> None:
+        cdir = self._cdir(cand.candidate_id)
+        cdir.mkdir(parents=True, exist_ok=True)
+        (cdir / "candidate.json").write_text(
+            cand.model_dump_json(indent=2), encoding="utf-8"
+        )
+
+
+def draft_from_families(
+    store: CandidateStore, families: list[OpportunityFamily]
+) -> list[Candidate]:
+    """Create one pending candidate per new family (idempotent by slug). Families
+    whose label yields no legal slug are skipped."""
+    created: list[Candidate] = []
+    for fam in families:
+        cand_id = slugify(fam.label)
+        if not cand_id or store.get(cand_id) is not None:
+            continue
+        cand = Candidate(
+            candidate_id=cand_id,
+            family_label=fam.label,
+            session_count=fam.session_count,
+            event_count=fam.event_count,
+            projects=sorted(fam.projects),
+        )
+        store.write_skill_md(cand_id, _draft_md(cand_id, fam))
+        store.save(cand)
+        created.append(cand)
+    return created
+
+
+def approve(
+    store: CandidateStore,
+    reg: Registry,
+    cand_id: str,
+    host_dir: Path,
+    *,
+    actor: str = "user",
+    reason: str | None = None,
+) -> SkillVersion:
+    """Promote a candidate into the registry and materialize it to the host.
+
+    The single write path (One Writer Rule): parses the current — possibly
+    human-edited — SKILL.md, registers an immutable ACTIVE version, copies it to
+    the host skills dir, and marks the candidate approved. Raises before any
+    write if the candidate is unknown or already approved."""
+    cand = store.get(cand_id)
+    if cand is None:
+        raise CandidateError(f"unknown candidate: {cand_id}")
+    if cand.status == "approved":
+        raise CandidateError(f"candidate {cand_id!r} already approved")
+
+    raw = store.skill_md(cand_id)
+    skill_id = parse(raw).frontmatter.name  # frontmatter name is authoritative
+    reg.init()
+    prov = [
+        Provenance(
+            kind=ProvenanceKind.CAPTURED_SESSION,
+            origin=f"mined:{cand.family_label} ({cand.session_count} sessions)",
+        )
+    ]
+    sv = reg.add_version(
+        skill_id,
+        raw,
+        CandidateType.CAPTURED,
+        prov,
+        status=SkillStatus.ACTIVE,
+        actor=actor,
+        reason=reason or f"approve candidate {cand_id}",
+    )
+    reg.materialize(skill_id, host_dir)
+
+    cand.status = "approved"
+    cand.skill_id = skill_id
+    cand.version = sv.version
+    store.save(cand)
+    return sv
+
+
+def reject(store: CandidateStore, cand_id: str) -> Candidate:
+    cand = store.get(cand_id)
+    if cand is None:
+        raise CandidateError(f"unknown candidate: {cand_id}")
+    cand.status = "rejected"
+    store.save(cand)
+    return cand

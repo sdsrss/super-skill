@@ -68,3 +68,33 @@ def test_mine_surfaces_recurring_family(tmp_path):
 
 def test_mine_empty(tmp_path):
     assert mine_families(EventLog(root=tmp_path).iter_events()) == []
+
+
+def test_mine_ignores_envelope_and_redaction_noise(tmp_path):
+    """Coarse mining must surface task content, not the hook envelope (event name,
+    session id, cwd) or redaction placeholders — those produce junk families."""
+    log = EventLog(root=tmp_path)
+    for sid in ("s1", "s2", "s3"):
+        log.append(
+            EventType.USER_PROMPT_SUBMIT,
+            sid,
+            {
+                # envelope fields the CLI dumps wholesale into payload:
+                "hook_event_name": "UserPromptSubmit",
+                "session_id": sid,
+                "cwd": "/home/sds/secret-proj",
+                # real content + a secret that gets redacted in place:
+                "text": "flaky retry loop in the pipeline",
+                "note": "key sk-DEADBEEF0123456789abcdefghij here",
+            },
+        )
+    labels = " ".join(f.label for f in mine_families(log.iter_events(), min_sessions=3))
+    # envelope / metadata must not appear as mined tokens
+    assert "userpromptsubmit" not in labels
+    assert "session" not in labels
+    assert "secret-proj" not in labels  # cwd-derived slug
+    # redaction placeholder + kind name must not leak as tokens
+    assert "redacted" not in labels
+    assert "openai" not in labels
+    # real content still mines
+    assert any(w in labels for w in ("flaky", "retry", "pipeline"))
