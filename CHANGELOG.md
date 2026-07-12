@@ -3,6 +3,28 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic versioning.
 
+## [0.2.0] - 2026-07-12
+
+Completes the walking-skeleton loop: mined opportunity families can now become
+human-approved skills, still routed through candidate → gate → promote (no
+component writes the production skill set except on approve).
+
+### Added
+- **Candidate approval loop** — `candidate draft` scaffolds a skill from a mined
+  family (an honest TODO-stub; coarse mining can name a recurring family, not
+  author its procedure), `candidate list/show` review it, and `candidate approve`
+  promotes the (human-editable) draft: registers an immutable ACTIVE version and
+  materializes it to the host skills dir. Drafts live as pre-promotion scratch,
+  git-ignored by the registry — only `approve` writes tracked state (One Writer
+  Rule). `candidate reject` records a decision without promoting.
+
+### Fixed
+- **Mining noise** — coarse mining no longer treats the hook envelope as content:
+  the event type is no longer seeded into the token stream, envelope keys
+  (`hook_event_name` / `session_id` / `cwd` / …) are skipped, and `[REDACTED:kind]`
+  placeholders are stripped. These had produced junk families (`userpromptsubmit-*`,
+  cwd-derived slugs, redaction kind names).
+
 ## [0.1.0] - 2026-07-12
 
 First release: the **M0+WS package-manager** scope. A GATE-1 measurement of the
