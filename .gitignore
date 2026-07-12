@@ -1,0 +1,45 @@
+# Project-local docs & AI assistant config (not committed)
+docs/
+CLAUDE.md
+.claude/
+.code-graph/
+tasks/
+MEMORY.md
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.python-version
+.uv-cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Environment & secrets
+.env
+.env.*
+*.local
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node (tooling, if any)
+node_modules/
+
+# Logs & temp
+*.log
+tmp/
