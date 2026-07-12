@@ -146,8 +146,8 @@ super-skill 刻意停在**包管理器**形态(里程碑 M0 + WS)。自学习闭
 脱敏在*任何写入之前*运行:密钥值与私有路径永不进日志。捕获默认关闭,需你接线(`super-skill hooks-config`)。
 
 **插件必须依赖 PyPI 才能用吗?**
-插件调用 PATH 上的 `super-skill` CLI。PyPI 发布前,从源码装 CLI:
-`uv tool install git+https://github.com/sdsrss/super-skill`。
+插件调用 PATH 上的 `super-skill` CLI。从 PyPI 安装:
+`uv tool install super-skill-cli`(或 `pipx install super-skill-cli`)。
 
 **支持 Codex 吗?**
 支持——同一个 CLI 加一个面向 `~/.agents/skills` 的 `codex/` 安装包。CLI *内部的* Codex Target

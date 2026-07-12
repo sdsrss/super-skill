@@ -168,8 +168,8 @@ Redaction runs *before* any write: secret values and private paths never reach t
 log. Capture is off until you wire it (`super-skill hooks-config`).
 
 **Do I need PyPI for the plugin to work?**
-The plugin calls the `super-skill` CLI on your PATH. Until the PyPI release,
-install the CLI from source: `uv tool install git+https://github.com/sdsrss/super-skill`.
+The plugin calls the `super-skill` CLI on your PATH. Install it from PyPI:
+`uv tool install super-skill-cli` (or `pipx install super-skill-cli`).
 
 **Does it support Codex?**
 Yes — the same CLI plus a `codex/` install package for `~/.agents/skills`. A Codex
