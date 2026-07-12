@@ -47,6 +47,12 @@ def seed_from_host(reg: Registry, host_dir: Path) -> SeedReport:
             continue
 
         skill_id = parsed.frontmatter.name
+        # agentskills.io: frontmatter name must match the dir name. If it doesn't,
+        # skip rather than silently versioning one skill under another's id — two
+        # dirs sharing a name would otherwise collapse into one version chain (M11).
+        if skill_id != d.name:
+            report.skipped.append((d.name, f"frontmatter name {skill_id!r} != dir name"))
+            continue
         existing = reg.get(skill_id)
         if (
             existing is not None

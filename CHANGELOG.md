@@ -3,6 +3,65 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic versioning.
 
+## [0.11.0] - 2026-07-12
+
+Security & reliability hardening from a full production-readiness audit. All fixes
+are backward-compatible; defaults unchanged. **Recommended upgrade** if you wire
+live capture via `hooks-config` — the capture/redaction path had secret-leak and
+crash-safety gaps that this release closes.
+
+**Migration**: none required. An existing `mine_state.json` from 0.10.0 is auto-
+handled (the watermark format changed to a session-id set; an old file reads as
+"nothing mined" and self-heals on the next `mine`). **Revert path**: pin the prior
+release with `pip install super-skill-cli==0.10.0`.
+
+### Security
+- **Redaction no longer leaks underscore-delimited env-var secrets** — `DB_PASSWORD=…`,
+  `AWS_SECRET_ACCESS_KEY=…`, `SECRET_KEY=…` etc. were written verbatim to the WAL
+  because the keyword rule anchored on `\b` (an underscore is a word char). The
+  same `redact_text` feeds the eval-lite secret gate, so this closed a leak in
+  both paths at once.
+- **Redaction now matches current key formats** — OpenAI `sk-proj-`/`sk-svcacct-`,
+  Stripe `sk_live_`/`sk_test_`, GitHub fine-grained PATs `github_pat_`, and GCP
+  `AIza…` keys were previously unmatched.
+- **The instruction-layer gate + eval-lite scan the full frontmatter**, not just
+  `description` + body — an injection or secret in any other frontmatter field
+  (e.g. `instructions:`, `metadata:`) previously shipped to the host unscanned.
+- **The gate normalizes cheap obfuscation** (NFKC + zero-width strip + common
+  Cyrillic/Greek homoglyph fold) so `с​url … | bash` and homoglyph variants no
+  longer slip a shell pipe past the ASCII rules.
+- **The capture WAL and mine watermark are gitignored** — `events/` and
+  `mine_state.json` are no longer swept into the registry's audit history by
+  `git add -A`, keeping (redacted-but-private) session content out of the repo.
+- **Redaction depth is capped** so a pathologically nested payload can't
+  `RecursionError`; the over-deep subtree is dropped rather than leaked.
+
+### Fixed
+- **`capture` never fails the host session (NFR-3)** — non-object JSON on stdin
+  and any WAL write error are now swallowed with exit 0; previously a list/scalar
+  payload raised and exited 1.
+- **The WAL tolerates a torn/partial line** — a hook killed mid-append no longer
+  bricks every reader (`status`/`mine`/`count`); the bad line is skipped.
+- **Concurrent captures no longer corrupt the WAL** — each event is one atomic
+  `O_APPEND` write instead of a buffered write that could interleave across
+  processes.
+- **Registry/candidate/watermark writes are atomic** (temp + `os.replace`), and a
+  corrupt `meta.json`/`candidate.json` surfaces as a typed error instead of a raw
+  traceback that crashed `status`/`list`/`doctor`.
+- **`approve` is crash-idempotent** — a crash between the registry commit and
+  marking the candidate approved no longer double-promotes on re-run.
+- **`seed` skips a skill whose frontmatter `name` ≠ its directory name**, so two
+  host dirs sharing a name can no longer collapse into one version chain.
+- **The `mine` reminder survives WAL TTL pruning** — the watermark tracks mined
+  session ids, so new sessions still count as "unmined" after old ones roll off.
+- **`init` rebuilds a missing/stale `.gitignore`** even when `.git` already exists.
+
+### Changed
+- Docs `02`/`03`/`04` bumped to v1.4 with WS-vs-target implementation notes
+  (registry-as-source distribution, WS entity/eval-lite subsets) for doc↔code
+  consistency. Test suite grew 127 → 159; `gate.py` and `redact.py` at 100%
+  line coverage.
+
 ## [0.10.0] - 2026-07-12
 
 ### Added

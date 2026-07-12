@@ -56,6 +56,48 @@ def test_rollback_unknown_version_errors(reg):
         reg.set_active("s", "v9", op=OperationType.ROLLBACK)
 
 
+def test_corrupt_meta_raises_registry_error(reg):
+    """P1-3 / M12: a truncated/corrupt meta.json must surface as RegistryError,
+    not a raw pydantic ValidationError that crashes status/list/doctor."""
+    reg.add_version("dep", _md("dep", "x"), CandidateType.CAPTURED, [])
+    (reg.skills_root / "dep" / "meta.json").write_text("{ not valid json", encoding="utf-8")
+    with pytest.raises(RegistryError):
+        reg.get("dep")
+    with pytest.raises(RegistryError):
+        reg.list_skills()
+
+
+def test_events_and_watermark_gitignored(reg):
+    """P2-2 / M9: the capture WAL + mine watermark must not be swept into the
+    registry's tracked history by ``git add -A``."""
+    (reg.root / "events" / "2026-01-01").mkdir(parents=True)
+    (reg.root / "events" / "2026-01-01" / "events.jsonl").write_text("{}\n")
+    (reg.root / "mine_state.json").write_text("{}")
+    reg.add_version("s", _md("s", "d"), CandidateType.CAPTURED, [])  # triggers git add -A
+    ls = reg._git("ls-files")
+    assert "events/" not in ls
+    assert "mine_state.json" not in ls
+
+
+def test_gitignore_rebuilt_if_missing(reg):
+    """P2-3 / M10: .git present but .gitignore deleted -> init must rebuild it,
+    else candidates/ becomes tracked and the One Writer Rule breaks."""
+    (reg.root / ".gitignore").unlink()
+    reg.init()
+    gi = (reg.root / ".gitignore").read_text()
+    assert "candidates/" in gi and "events/" in gi
+
+
+def test_add_version_identical_to_active_is_noop(reg):
+    """P1-4 / M8: re-adding content identical to the active version must not
+    create a new node (crash-idempotent promotion)."""
+    raw = _md("s", "same")
+    sv1 = reg.add_version("s", raw, CandidateType.CAPTURED, [])
+    sv2 = reg.add_version("s", raw, CandidateType.CAPTURED, [])
+    assert sv2.version == sv1.version
+    assert list(reg.get("s").versions) == ["v1"]
+
+
 def test_make_active_false_keeps_pointer(reg):
     reg.add_version("s", _md("s", "v1"), CandidateType.CAPTURED, [])
     reg.add_version("s", _md("s", "cand"), CandidateType.FIX, [], make_active=False)

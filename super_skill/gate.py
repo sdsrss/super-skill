@@ -16,10 +16,30 @@ land at M1 — v1 candidates carry no scripts, so there is nothing to cross-chec
 
 from __future__ import annotations
 
+import json
 import re
+import unicodedata
 from dataclasses import dataclass
 
 from .skillmd import parse
+
+# Cheap-obfuscation defenses (M7): strip zero-width/format chars and fold the
+# common Cyrillic/Greek homoglyphs so ``с​url`` (ZWSP) and ``сurl`` (Cyrillic es)
+# can't slip a shell pipe past the ASCII regexes. Base64-encoded payloads remain
+# out of scope until the M1 LLM-judge layer.
+_ZERO_WIDTH = dict.fromkeys(map(ord, "​‌‍⁠﻿"), None)
+_CONFUSABLES = str.maketrans({
+    "а": "a", "ｂ": "b", "с": "c", "ԁ": "d", "е": "e", "ɡ": "g", "һ": "h", "і": "i",
+    "ј": "j", "ⅼ": "l", "ո": "n", "о": "o", "р": "p", "ѕ": "s", "т": "t", "υ": "u",
+    "ν": "v", "х": "x", "у": "y", "α": "a", "ε": "e", "ο": "o", "ρ": "p", "κ": "k",
+})
+
+
+def _normalize(text: str) -> str:
+    """Fold cheap obfuscations before pattern-matching."""
+    text = unicodedata.normalize("NFKC", text)
+    text = text.translate(_ZERO_WIDTH)
+    return text.translate(_CONFUSABLES)
 
 # (category, pattern). Case-insensitive. Ordered most-severe first.
 _RULES: list[tuple[str, re.Pattern[str]]] = [
@@ -84,6 +104,7 @@ class InstructionGateError(RuntimeError):
 
 def scan_text(text: str, location: str) -> list[Finding]:
     findings: list[Finding] = []
+    text = _normalize(text)
     for category, pat in _RULES:
         for m in pat.finditer(text):
             snippet = " ".join(m.group(0).split())[:80]
@@ -92,11 +113,18 @@ def scan_text(text: str, location: str) -> list[Finding]:
 
 
 def scan_skill_md(raw: str) -> list[Finding]:
-    """Scan a SKILL.md's description + body for external-action imperatives.
+    """Scan a SKILL.md's frontmatter + body for external-action imperatives.
 
     description is scanned separately: §2.4bis forbids imperative / second-person
-    external-action language there (it would both win routing and inject)."""
+    external-action language there (it would both win routing and inject). Every
+    OTHER frontmatter field is scanned too (M6): ``extra="allow"`` means fields
+    like ``instructions:`` / ``metadata:`` ship verbatim to the host, so they
+    need the same scrutiny — scanning only description + body left them a bypass."""
     parsed = parse(raw)
-    return scan_text(parsed.frontmatter.description, "description") + scan_text(
-        parsed.body, "body"
-    )
+    findings = scan_text(parsed.frontmatter.description, "description")
+    fm = parsed.frontmatter.model_dump()
+    # name is NAME_RE-constrained (safe); description already scanned above.
+    extra = {k: v for k, v in fm.items() if k not in ("name", "description") and v is not None}
+    if extra:
+        findings += scan_text(json.dumps(extra, default=str, ensure_ascii=False), "frontmatter")
+    return findings + scan_text(parsed.body, "body")

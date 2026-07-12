@@ -10,11 +10,12 @@ candidate -> gate (human approve) -> promote, never bypassed.
 
 from __future__ import annotations
 
+import os
 import re
 from datetime import datetime
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from . import config
 from .evallite import EvalError, eval_lite
@@ -95,7 +96,10 @@ class CandidateStore:
         meta = self._cdir(cand_id) / "candidate.json"
         if not meta.exists():
             return None
-        return Candidate.model_validate_json(meta.read_text(encoding="utf-8"))
+        try:
+            return Candidate.model_validate_json(meta.read_text(encoding="utf-8"))
+        except ValidationError as e:
+            raise CandidateError(f"{cand_id}: corrupt candidate.json ({e})") from e
 
     def list(self) -> list[Candidate]:
         if not self.dir.exists():
@@ -116,9 +120,11 @@ class CandidateStore:
     def save(self, cand: Candidate) -> None:
         cdir = self._cdir(cand.candidate_id)
         cdir.mkdir(parents=True, exist_ok=True)
-        (cdir / "candidate.json").write_text(
-            cand.model_dump_json(indent=2), encoding="utf-8"
-        )
+        # Atomic write so a crash can't leave a truncated candidate.json (M12).
+        p = cdir / "candidate.json"
+        tmp = p.with_suffix(".json.tmp")
+        tmp.write_text(cand.model_dump_json(indent=2), encoding="utf-8")
+        os.replace(tmp, p)
 
 
 def draft_from_families(

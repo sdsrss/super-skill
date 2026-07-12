@@ -18,6 +18,9 @@ def env(tmp_path, monkeypatch):
     host.mkdir()
     monkeypatch.setenv("SUPER_SKILL_HOME", str(tmp_path / "state"))
     monkeypatch.setenv("SUPER_SKILL_HOST_SKILLS", str(host))
+    # P4-3: pin the codex target too, so a --host codex|all path can never write
+    # to the real ~/.agents/skills. Tests needing it derive `tmp_path / "codex"`.
+    monkeypatch.setenv("SUPER_SKILL_CODEX_SKILLS", str(tmp_path / "codex"))
     return host
 
 
@@ -104,6 +107,27 @@ def test_capture_malformed_input_never_fails(env):
 
     r = runner.invoke(app, ["capture"], input='{"hook_event_name": "Bogus"}')
     assert r.exit_code == 0  # unknown event type -> no-op, still 0
+
+
+def test_capture_non_dict_json_never_fails(env):
+    """P1-1 / M5: valid-but-non-object JSON (list/scalar) must not fail the
+    session — data.get(...) used to raise AttributeError -> exit 1."""
+    for payload in ("[]", '"just a string"', "42", "null"):
+        r = runner.invoke(app, ["capture"], input=payload)
+        assert r.exit_code == 0, f"{payload!r} -> exit {r.exit_code}"
+
+
+def test_capture_survives_append_failure(env, monkeypatch):
+    """P1-1 / M5: any write-path error inside append must still exit 0 (NFR-3),
+    not surface a traceback to the host session."""
+    from super_skill import cli as cli_mod
+
+    def boom(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(cli_mod.EventLog, "append", boom)
+    r = runner.invoke(app, ["capture"], input='{"hook_event_name": "Stop", "session_id": "s1"}')
+    assert r.exit_code == 0
 
 
 def test_candidate_flow_cli(env):
@@ -319,3 +343,16 @@ def test_hooks_config_cli(env):
         "SessionStart", "UserPromptSubmit", "Stop", "SessionEnd", "PreToolUse", "PostToolUse",
     }
     assert "capture" in parsed["hooks"]["Stop"][0]["hooks"][0]["command"]
+
+
+def test_materialize_host_all_hits_both_sandboxes(env, tmp_path):
+    """P4-3: `--host all` must materialize into the sandboxed claude + codex
+    dirs (env-overridden), never the real ~/.claude or ~/.agents."""
+    host = env
+    codex = tmp_path / "codex"
+    _make_skill(host, "alpha", "first")
+    assert runner.invoke(app, ["seed"]).exit_code == 0
+    r = runner.invoke(app, ["materialize", "--host", "all"])
+    assert r.exit_code == 0
+    assert (host / "alpha" / "SKILL.md").exists()
+    assert (codex / "alpha" / "SKILL.md").exists()  # codex sandbox, not ~/.agents
