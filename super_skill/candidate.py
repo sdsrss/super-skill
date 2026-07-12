@@ -17,6 +17,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field
 
 from . import config
+from .evallite import EvalError, eval_lite
 from .gate import InstructionGateError, scan_skill_md
 from .mine import OpportunityFamily
 from .registry import Registry
@@ -172,6 +173,11 @@ def approve(
     findings = scan_skill_md(raw)
     if findings:
         raise InstructionGateError(findings)
+    # Deterministic eval-lite hard gate (docs/04 §1.6): schema, zero secret leak,
+    # token budget. The No Skill/Skill two-arm is Insufficient Evidence at WS.
+    report = eval_lite(raw)
+    if not report.passed:
+        raise EvalError(report)
     skill_id = parse(raw).frontmatter.name  # frontmatter name is authoritative
     reg.init()
     prov = [
