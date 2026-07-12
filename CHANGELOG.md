@@ -3,6 +3,18 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic versioning.
 
+## [0.7.0] - 2026-07-12
+
+### Added
+- **Mine reminder** — `status` now nudges (`reminder : N distinct sessions
+  unmined — run mine`) once enough new sessions have accumulated since the last
+  mine. A watermark (`mine_state.json`) records the distinct-session count at the
+  last mine, so "unmined" is honest: it clears when you mine and only fires again
+  as new sessions pile up. Threshold defaults to 3 (`SUPER_SKILL_MINE_REMINDER`
+  overrides). `mine` also reports the distinct-session count when nothing yet
+  clears the recurrence threshold, and both `mine` and `candidate draft` reset
+  the watermark.
+
 ## [0.6.0] - 2026-07-12
 
 ### Added
