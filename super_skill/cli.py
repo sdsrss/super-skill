@@ -12,6 +12,7 @@ import typer
 from . import config
 from .candidate import CandidateError, CandidateStore, approve, draft_from_families, reject
 from .capture import EventLog
+from .gate import InstructionGateError, scan_skill_md
 from .mine import mine_families
 from .registry import Registry, RegistryError
 from .schemas import EventType, OperationType
@@ -226,6 +227,13 @@ def candidate_show(candidate_id: str) -> None:
     typer.echo(f"recurrence : {cand.session_count} sessions, {cand.event_count} events")
     if cand.version:
         typer.echo(f"promoted   : {cand.skill_id}@{cand.version}")
+    findings = scan_skill_md(store.skill_md(candidate_id))
+    if findings:
+        typer.echo(f"gate       : {len(findings)} finding(s) — approve will be BLOCKED:")
+        for f in findings:
+            typer.echo(f"  ! {f.category} in {f.location}: {f.snippet}")
+    else:
+        typer.echo("gate       : clean (no injection patterns)")
     typer.echo("--- SKILL.md ---")
     typer.echo(store.skill_md(candidate_id))
 
@@ -240,6 +248,13 @@ def candidate_approve(
     reg = _registry()
     try:
         sv = approve(store, reg, candidate_id, config.host_skills_dir(), reason=reason or None)
+    except InstructionGateError as e:
+        typer.echo(str(e), err=True)
+        for f in e.findings:
+            typer.echo(f"  ! {f.category} in {f.location}: {f.snippet}", err=True)
+        typer.echo("edit the candidate's SKILL.md to remove the flagged text, then re-approve.",
+                   err=True)
+        raise typer.Exit(1) from e
     except (CandidateError, RegistryError, SkillMdError) as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(1) from e

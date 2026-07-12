@@ -17,6 +17,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field
 
 from . import config
+from .gate import InstructionGateError, scan_skill_md
 from .mine import OpportunityFamily
 from .registry import Registry
 from .schemas import (
@@ -164,6 +165,13 @@ def approve(
         raise CandidateError(f"candidate {cand_id!r} already approved")
 
     raw = store.skill_md(cand_id)
+    # Instruction-layer adversarial gate (docs/04 §2.4bis): v1's only mandatory
+    # security gate. Runs BEFORE any write — a blocked candidate never reaches
+    # the registry or the host. Captured content is untrusted; auto-approval
+    # never bypasses this (there is no auto-approval, but the invariant holds).
+    findings = scan_skill_md(raw)
+    if findings:
+        raise InstructionGateError(findings)
     skill_id = parse(raw).frontmatter.name  # frontmatter name is authoritative
     reg.init()
     prov = [
