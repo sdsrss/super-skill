@@ -72,6 +72,43 @@ class ProvenanceKind(StrEnum):
     DISTILLED_EXTERNAL = "distilled_external"
 
 
+class EventType(StrEnum):
+    """The six host hook events captured in WS (docs/01 FR-CAP-1)."""
+
+    SESSION_START = "SessionStart"
+    USER_PROMPT_SUBMIT = "UserPromptSubmit"
+    PRE_TOOL_USE = "PreToolUse"
+    POST_TOOL_USE = "PostToolUse"
+    STOP = "Stop"
+    SESSION_END = "SessionEnd"
+
+
+class RedactionMark(BaseModel):
+    """What was redacted and where — never the value (docs/01 FR-CAP-2)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: str
+    location: str = Field(description="dotted path of the field the secret was found in")
+    count: int = 1
+
+
+class CaptureEvent(BaseModel):
+    """One redacted host event appended to the JSONL WAL. WS keeps only observable
+    actions + short outcomes — never hidden chain-of-thought (FR-CAP-7)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    event_id: str
+    session_id: str
+    event_type: EventType
+    project_id: str | None = None
+    timestamp: datetime = Field(default_factory=utcnow)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    redactions: list[RedactionMark] = Field(default_factory=list)
+    consent_scope: str = "default"
+
+
 class Provenance(BaseModel):
     """Where a version's content came from and under what license."""
 

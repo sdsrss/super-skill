@@ -76,3 +76,31 @@ def test_rollback_no_previous_fails(env):
     runner.invoke(app, ["seed"])
     r = runner.invoke(app, ["rollback", "alpha"])
     assert r.exit_code == 1
+
+
+def test_capture_from_stdin_and_mine(env):
+    import json
+
+    for sid in ("s1", "s2", "s3"):
+        payload = json.dumps({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": sid,
+            "text": "dependency resolution failure in lockfile",
+        })
+        r = runner.invoke(app, ["capture"], input=payload)
+        assert r.exit_code == 0
+
+    r = runner.invoke(app, ["status"])
+    assert "events     : 3" in r.output
+
+    r = runner.invoke(app, ["mine"])
+    assert r.exit_code == 0
+    assert "lockfile" in r.output or "dependency" in r.output or "resolution" in r.output
+
+
+def test_capture_malformed_input_never_fails(env):
+    r = runner.invoke(app, ["capture"], input="not json at all")
+    assert r.exit_code == 0  # NFR-3: hook must never fail the session
+
+    r = runner.invoke(app, ["capture"], input='{"hook_event_name": "Bogus"}')
+    assert r.exit_code == 0  # unknown event type -> no-op, still 0

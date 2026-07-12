@@ -4,11 +4,16 @@ arrive only if the GATE opens the M2-M5 research track."""
 
 from __future__ import annotations
 
+import json
+import sys
+
 import typer
 
 from . import config
+from .capture import EventLog
+from .mine import mine_families
 from .registry import Registry, RegistryError
-from .schemas import OperationType
+from .schemas import EventType, OperationType
 from .seed import seed_from_host
 
 app = typer.Typer(add_completion=False, help="Personal Agent-Skill package manager.")
@@ -38,6 +43,44 @@ def seed() -> None:
 
 
 @app.command()
+def capture(
+    event_type: str = typer.Option("", "--event-type", help="override hook_event_name"),
+) -> None:
+    """Append a host hook event (JSON on stdin) to the WAL, redacted.
+
+    Designed to be called from a Claude Code hook. Never fails the session
+    (NFR-3): malformed input or an unknown event type exits 0 without writing.
+    """
+    try:
+        raw = sys.stdin.read()
+        data = json.loads(raw) if raw.strip() else {}
+    except (json.JSONDecodeError, OSError):
+        raise typer.Exit(0) from None
+    name = event_type or str(data.get("hook_event_name", ""))
+    try:
+        etype = EventType(name)
+    except ValueError:
+        raise typer.Exit(0) from None
+    session_id = str(data.get("session_id", "unknown"))
+    project_id = data.get("cwd")
+    EventLog().append(
+        etype, session_id, data, project_id=str(project_id) if project_id else None
+    )
+
+
+@app.command()
+def mine(min_sessions: int = typer.Option(3, "--min-sessions")) -> None:
+    """Surface recurring task families from captured events (FR-GEN-1 signal)."""
+    families = mine_families(EventLog().iter_events(), min_sessions=min_sessions)
+    if not families:
+        typer.echo(f"no families recurring across >={min_sessions} sessions yet")
+        return
+    typer.echo(f"{'sessions':>8}  {'events':>6}  family")
+    for fam in families:
+        typer.echo(f"{fam.session_count:>8}  {fam.event_count:>6}  {fam.label}")
+
+
+@app.command()
 def status() -> None:
     """Registry summary: location, git head, skill/version counts."""
     reg = _registry()
@@ -48,6 +91,7 @@ def status() -> None:
     typer.echo(f"git head   : {reg.head()}")
     typer.echo(f"skills     : {len(records)} ({active} active)")
     typer.echo(f"versions   : {versions}")
+    typer.echo(f"events     : {EventLog(reg.root).count()}")
 
 
 @app.command("list")
