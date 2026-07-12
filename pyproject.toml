@@ -1,6 +1,6 @@
 [project]
 name = "super-skill"
-version = "0.5.0"
+version = "0.6.0"
 description = "Personal Agent-Skill package manager: versioned registry, seed import, explain, rollback (M0+WS scope)."
 readme = "README.md"
 requires-python = ">=3.12"

@@ -3,6 +3,13 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic versioning.
 
+## [0.6.0] - 2026-07-12
+
+### Added
+- **Candidate visibility** — `status` now reports a candidate count with a
+  per-status breakdown, and `list` appends a "pending candidates" section so
+  drafts awaiting approval are visible without a separate command.
+
 ## [0.5.0] - 2026-07-12
 
 ### Added
