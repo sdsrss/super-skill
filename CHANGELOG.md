@@ -3,6 +3,23 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic versioning.
 
+## [0.9.0] - 2026-07-12
+
+### Added
+- **Codex install package** (`codex/`) — Codex has no marketplace; it reads
+  open-standard `SKILL.md` from `~/.agents/skills`. Ships a portable `super-skill`
+  meta-skill (name+description only, no Claude-specific slash commands) plus an
+  idempotent `codex/install.sh` that drops it into `~/.agents/skills/super-skill/`,
+  and `codex/README.md`. The CLI is host-agnostic — Codex users `pipx install
+  super-skill-cli` the same way and point it at the Codex dir with
+  `SUPER_SKILL_HOST_SKILLS=~/.agents/skills`.
+
+### Notes
+- No `agents/openai.yaml` is shipped — that Codex host-extension's exact schema is
+  Codex-version-specific; the package ships only the open-standard SKILL.md every
+  Codex version reads. A Codex Target Adapter inside the CLI (docs/01 FR-PUB-2)
+  remains P1. PyPI publish is still a separate credentialed step.
+
 ## [0.8.0] - 2026-07-12
 
 ### Added
