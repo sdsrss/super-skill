@@ -135,6 +135,27 @@ def test_approve_blocked_by_eval_writes_nothing(tmp_path):
     assert not (host / "dependency-resolution").exists()
 
 
+def test_approve_is_crash_idempotent(tmp_path):
+    """P1-4 / M8: a crash between the registry commit and marking the candidate
+    approved leaves it 'pending'; re-running approve must NOT double-promote."""
+    store = CandidateStore(root=tmp_path / "state")
+    reg = Registry(root=tmp_path / "state")
+    host = tmp_path / "host"
+    draft_from_families(store, [_fam("dependency resolution")])
+    sv1 = approve(store, reg, "dependency-resolution", host)
+    # simulate crash: version promoted + committed, but candidate.save never ran
+    cand = store.get("dependency-resolution")
+    cand.status = "pending"
+    cand.version = None
+    cand.skill_id = None
+    store.save(cand)
+    # re-run approve on the same (unedited) SKILL.md must be idempotent
+    sv2 = approve(store, reg, "dependency-resolution", host)
+    rec = reg.get("dependency-resolution")
+    assert list(rec.versions) == ["v1"], f"double-promoted: {list(rec.versions)}"
+    assert sv2.version == sv1.version
+
+
 def test_approve_unknown_candidate_raises(tmp_path):
     store = CandidateStore(root=tmp_path / "state")
     reg = Registry(root=tmp_path / "state")

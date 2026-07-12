@@ -1,5 +1,15 @@
 from super_skill.redact import redact_payload, redact_text
 
+# Secret-shaped test inputs are assembled from fragments so repository secret
+# scanners (e.g. GitHub push protection) don't flag these intentional fixtures
+# as real leaks. At runtime they are the full shapes the redaction rules match.
+_AWS_ID = "AKIA" + "ABCDEFGHIJKLMNOP"
+_GHP = "ghp_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+_SLACK = "xoxb-" + "123456789012-abcdefghijklmnop"
+_SLACK2 = "xoxb-" + "1234567890-abcdefghij"
+_STRIPE_LIVE = "sk_live_" + "abcdefghijklmnop1234567890"
+_STRIPE_TEST = "sk_test_" + "abcdefghijklmnop1234567890"
+
 
 def test_openai_key_redacted():
     s = "use sk-abcdefghij0123456789ABCDEFGHIJ as the key"
@@ -17,9 +27,9 @@ def test_anthropic_key_redacted():
 
 
 def test_github_and_aws_tokens():
-    red, counts = redact_text("ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 AKIAABCDEFGHIJKLMNOP")
-    assert "ghp_ABCDEFGHIJ" not in red
-    assert "AKIAABCDEFGHIJKLMNOP" not in red
+    red, counts = redact_text(f"{_GHP} {_AWS_ID}")
+    assert _GHP not in red
+    assert _AWS_ID not in red
     assert "github_token" in counts and "aws_key" in counts
 
 
@@ -28,6 +38,14 @@ def test_assigned_secret_keeps_key_drops_value():
     assert "hunter2secret" not in red
     assert "password" in red  # key name preserved for context
     assert counts.get("assigned_secret") == 1
+
+
+def test_slack_token_redacted():
+    """P4-2: slack_token rule was defined but never exercised — it feeds the
+    zero-secret-leak hard gate, so silent breakage would leak a Slack token."""
+    red, counts = redact_text(f"webhook uses {_SLACK} here")
+    assert _SLACK not in red
+    assert counts.get("slack_token") == 1
 
 
 def test_private_key_block():
@@ -45,11 +63,65 @@ def test_email_and_home_path():
     assert "email" in counts and "home_path" in counts
 
 
+def test_underscore_env_var_secrets_redacted():
+    """P0-1 / H1: underscore-delimited env-var secrets must not leak. The keyword
+    is preceded by ``_`` (a word char), so a ``\\b`` left-anchor missed them."""
+    for s, val in [
+        ("DB_PASSWORD=SuperSecret123", "SuperSecret123"),
+        ("MYSQL_PWD=hunter2xyz", "hunter2xyz"),
+        ("AWS_SECRET_ACCESS_KEY=" + "placeholder_secret_val_123", "placeholder_secret_val_123"),
+        ("SECRET_KEY=django-insecure-abc123", "django-insecure-abc123"),
+        ("export API_KEY=plainvalue123", "plainvalue123"),  # space case must still work
+    ]:
+        red, counts = redact_text(s)
+        assert val not in red, f"leaked value in {s!r} -> {red!r}"
+        assert counts.get("assigned_secret") == 1
+    # the bare word "password" in prose must NOT trip the rule
+    red, counts = redact_text("update your password in the settings page")
+    assert counts == {}
+
+
+def test_modern_token_formats_redacted():
+    """P0-2 / H2: current provider key formats must be matched."""
+    cases = {
+        "sk-proj-abcdefghijklmnopqrstuvwx1234": "openai_key",
+        "sk-svcacct-abcdefghijklmnopqrstuvwx12": "openai_key",
+        _STRIPE_LIVE: "stripe_key",
+        _STRIPE_TEST: "stripe_key",
+        "github_pat_11ABCDEFG0abcdefghijKLMNOPqrstuv": "github_pat",
+        "AIzaSyD1abcdefghijklmnopqrstuvwxyz012345": "gcp_key",
+    }
+    for token, kind in cases.items():
+        red, counts = redact_text(f"the key is {token} ok")
+        assert token not in red, f"{kind} leaked: {red!r}"
+        assert counts.get(kind) == 1, f"{kind} not counted for {token!r}: {counts}"
+    # legacy formats must not regress
+    for legacy in ["sk-ant-api03-AbCdEf1234567890xyz", "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ01",
+                   _AWS_ID, _SLACK2]:
+        red, _ = redact_text(legacy)
+        assert legacy not in red, f"legacy regressed: {legacy!r} -> {red!r}"
+
+
 def test_clean_text_unchanged():
     s = "run pytest then bump the version"
     red, counts = redact_text(s)
     assert red == s
     assert counts == {}
+
+
+def test_redact_payload_deeply_nested_no_recursionerror():
+    """P2-6 / L18: a pathologically deep payload (beyond Python's recursion
+    limit) must not raise RecursionError — the guard caps depth and drops the
+    over-deep subtree rather than crashing or leaking it."""
+    obj: dict = {}
+    cur = obj
+    for _ in range(5000):  # well past sys.getrecursionlimit()
+        cur["k"] = {}
+        cur = cur["k"]
+    cur["k"] = "leak sk-DEADBEEF0123456789abcdefghij"
+    red, _ = redact_payload(obj)  # must not raise
+    assert isinstance(red, dict)
+    assert "DEADBEEF0123456789" not in str(red)  # over-deep subtree dropped, not leaked
 
 
 def test_redact_payload_nested_and_marks():

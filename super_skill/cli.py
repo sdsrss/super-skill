@@ -99,35 +99,43 @@ def capture(
         data = json.loads(raw) if raw.strip() else {}
     except (json.JSONDecodeError, OSError):
         raise typer.Exit(0) from None
-    name = event_type or str(data.get("hook_event_name", ""))
+    # NFR-3: the hook must NEVER fail the host session. Everything past here —
+    # non-dict JSON (data.get would raise), an unknown event type, or any WAL
+    # write error — is swallowed and exits 0. Capture-never-fails beats
+    # capture-complete.
     try:
-        etype = EventType(name)
-    except ValueError:
+        if not isinstance(data, dict):
+            raise typer.Exit(0)
+        name = event_type or str(data.get("hook_event_name", ""))
+        etype = EventType(name)  # ValueError on unknown type
+        session_id = str(data.get("session_id", "unknown"))
+        project_id = data.get("cwd")
+        EventLog().append(
+            etype, session_id, data, project_id=str(project_id) if project_id else None
+        )
+    except typer.Exit:
+        raise
+    except Exception:
         raise typer.Exit(0) from None
-    session_id = str(data.get("session_id", "unknown"))
-    project_id = data.get("cwd")
-    EventLog().append(
-        etype, session_id, data, project_id=str(project_id) if project_id else None
-    )
 
 
 @app.command()
 def mine(min_sessions: int = typer.Option(3, "--min-sessions")) -> None:
     """Surface recurring task families from captured events (FR-GEN-1 signal)."""
     log = EventLog()
+    session_ids = log.session_ids()
     families = mine_families(log.iter_events(), min_sessions=min_sessions)
-    distinct = log.distinct_sessions()
     if not families:
         typer.echo(
             f"no families recurring across >={min_sessions} sessions yet "
-            f"({distinct} distinct sessions captured)"
+            f"({len(session_ids)} distinct sessions captured)"
         )
     else:
         typer.echo(f"{'sessions':>8}  {'events':>6}  family")
         for fam in families:
             typer.echo(f"{fam.session_count:>8}  {fam.event_count:>6}  {fam.label}")
     # Mining acknowledges the accumulated sessions: reset the reminder watermark.
-    minestate.record_mined(log.root, distinct)
+    minestate.record_mined(log.root, session_ids)
 
 
 @app.command()
@@ -149,7 +157,7 @@ def status() -> None:
     log = EventLog(reg.root)
     typer.echo(f"events     : {log.count()}")
     typer.echo(f"candidates : {len(cands)} ({breakdown})")
-    unmined = minestate.unmined(reg.root, log.distinct_sessions())
+    unmined = minestate.unmined(reg.root, log.session_ids())
     if unmined >= minestate.reminder_threshold():
         typer.echo(f"reminder   : {unmined} distinct sessions unmined "
                    f"— run `super-skill mine`")
@@ -322,7 +330,7 @@ def candidate_draft(min_sessions: int = typer.Option(3, "--min-sessions")) -> No
     store = CandidateStore(config.state_root())
     created = draft_from_families(store, families)
     # Drafting acts on the mining, so it too clears the status reminder.
-    minestate.record_mined(log.root, log.distinct_sessions())
+    minestate.record_mined(log.root, log.session_ids())
     if not created:
         typer.echo("no new candidates (nothing mined, or all already drafted)")
         return

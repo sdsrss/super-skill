@@ -14,6 +14,7 @@ gate (§2.4bis) is a separate hard gate run first in ``candidate.approve``.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 
@@ -72,8 +73,11 @@ def eval_lite(raw: str) -> EvalReport:
     except SkillMdError as e:
         return EvalReport(checks=[EvalCheck("schema", False, str(e))])
 
-    # 2. zero credential / PII leak in the instruction text (凭据与 PII 泄漏 = 0)
-    text = f"{parsed.frontmatter.description}\n{parsed.body}"
+    # 2. zero credential / PII leak in the instruction text (凭据与 PII 泄漏 = 0).
+    # Scan the FULL frontmatter (extra="allow" ships every field to the host, M6),
+    # not just description + body.
+    fm = json.dumps(parsed.frontmatter.model_dump(), default=str, ensure_ascii=False)
+    text = f"{fm}\n{parsed.body}"
     _, counts = redact_text(text)
     leaks = {k: c for k, c in counts.items() if k != "home_path"}
     checks.append(

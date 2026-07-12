@@ -1,6 +1,14 @@
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+
 from super_skill.capture import EventLog
 from super_skill.mine import mine_families
 from super_skill.schemas import EventType
+
+
+def _proc_append(args):
+    """Top-level (picklable) worker for the cross-process concurrency test."""
+    root, i = args
+    EventLog(root=root).append(EventType.POST_TOOL_USE, f"s{i % 4}", {"i": i, "blob": "y" * 30000})
 
 
 def test_append_and_iter(tmp_path):
@@ -25,6 +33,46 @@ def test_secret_never_written_to_disk(tmp_path):
     on_disk = wal_files[0].read_text()
     assert secret not in on_disk
     assert "REDACTED:openai_key" in on_disk
+
+
+def test_iter_events_skips_corrupt_line(tmp_path):
+    """P0-3 / H3: a torn/partial line (killed hook mid-append) must not brick the
+    reader — bad lines are skipped, valid records still read."""
+    log = EventLog(root=tmp_path)
+    log.append(EventType.STOP, "s1", {"tool": "pytest"})
+    wal = next((tmp_path / "events").rglob("events.jsonl"))
+    with wal.open("a", encoding="utf-8") as f:
+        f.write('{"event_id":"partial","sess')  # torn final line, no newline
+    # every reader must survive
+    assert log.count() == 1
+    got = list(log.iter_events())
+    assert len(got) == 1 and got[0].session_id == "s1"
+    assert log.distinct_sessions() == 1
+
+
+def test_concurrent_appends_stay_intact(tmp_path):
+    """P0-4 / H4: concurrent appends of large payloads must not interleave into a
+    corrupt line. Each append is one atomic write."""
+    log = EventLog(root=tmp_path)
+    big = "x" * 20000  # exceeds the buffered-writer chunk size
+
+    def worker(i: int) -> None:
+        log.append(EventType.POST_TOOL_USE, f"s{i % 4}", {"i": i, "blob": big})
+
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        list(ex.map(worker, range(80)))
+    # all 80 lines must parse (no interleaving) and none lost
+    assert log.count() == 80
+
+
+def test_concurrent_appends_across_processes(tmp_path):
+    """P4-4 / H4: true multi-process concurrency (no GIL) — cross-process
+    O_APPEND appends of large payloads must not interleave or lose lines."""
+    log = EventLog(root=tmp_path)
+    n = 60
+    with ProcessPoolExecutor(max_workers=6) as ex:
+        list(ex.map(_proc_append, [(tmp_path, i) for i in range(n)]))
+    assert log.count() == n  # every line parsed -> no torn/interleaved records
 
 
 def test_project_id_home_path_redacted(tmp_path):

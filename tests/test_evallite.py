@@ -27,6 +27,19 @@ def test_secret_value_in_body_fails_gate():
     assert any(c.name == "no_secret_leak" and not c.passed for c in report.checks)
 
 
+def test_secret_in_extra_frontmatter_field_fails_gate():
+    """P1-2 / M6: a secret in any frontmatter field (not just description/body)
+    ships to the host, so it must fail the no-secret-leak gate."""
+    raw = (
+        "---\nname: s\ndescription: clean\n"
+        "metadata:\n  note: AWS_SECRET_ACCESS_KEY=" + "placeholder_secret_val_123\n"
+        "---\nclean body\n"
+    )
+    report = eval_lite(raw)
+    assert not report.passed
+    assert any(c.name == "no_secret_leak" and not c.passed for c in report.checks)
+
+
 def test_over_token_budget_fails_gate():
     huge = "word " * 6000  # well over the agentskills <5000-token body limit
     report = eval_lite(_md(huge))

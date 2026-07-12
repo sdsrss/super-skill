@@ -57,6 +57,21 @@ def test_seed_detects_change_as_new_version(tmp_path):
     assert reg.get("alpha").skill.active_version == "v2"
 
 
+def test_seed_skips_name_dir_mismatch(tmp_path):
+    """P2-4 / M11: a dir whose SKILL.md frontmatter name != dir name is skipped,
+    so two dirs can't silently collapse into one skill_id's version chain."""
+    host = tmp_path / "host"
+    _make_skill(host, "real", "ok")
+    other = host / "other"
+    other.mkdir()
+    (other / "SKILL.md").write_text("---\nname: real\ndescription: collide\n---\nx\n")
+    reg = Registry(root=tmp_path / "state")
+    report = seed_from_host(reg, host)
+    assert report.imported == ["real"]
+    assert "other" in dict(report.skipped)
+    assert list(reg.get("real").versions) == ["v1"]  # not collapsed into a v2
+
+
 def test_seed_does_not_touch_host(tmp_path):
     host = tmp_path / "host"
     _make_skill(host, "alpha", "first")

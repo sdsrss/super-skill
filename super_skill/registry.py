@@ -9,10 +9,11 @@ without changing the entity shapes (docs/03 §3 M1, docs/02 §7.7).
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from . import config
 from .schemas import (
@@ -28,6 +29,11 @@ from .schemas import (
 from .skillmd import content_hash, parse
 
 _GIT_ID = ["-c", "user.name=super-skill", "-c", "user.email=super-skill@localhost"]
+
+# Untracked by the registry git backend: pre-promotion scratch (candidates/,
+# locks/), the capture WAL + mine watermark (events/, mine_state.json — private
+# session content that must not enter audit history, M9), and atomic-write temps.
+_GITIGNORE = "locks/\ncandidates/\nevents/\nmine_state.json\n*.tmp\n"
 
 
 class SkillRecord(BaseModel):
@@ -63,17 +69,16 @@ class Registry:
     # ---- lifecycle ---------------------------------------------------------
     def init(self) -> None:
         self.skills_root.mkdir(parents=True, exist_ok=True)
-        # candidates/ holds pre-promotion draft scratch — kept out of tracked
-        # history so only approve (the Publisher path) writes registry state.
-        gitignore = "locks/\ncandidates/\n"
-        gi = self.root / ".gitignore"
         if not (self.root / ".git").exists():
             self._git("init", "-q")
-            gi.write_text(gitignore, encoding="utf-8")
-            self._commit("chore: initialize super-skill registry")
-        elif gi.exists() and "candidates/" not in gi.read_text(encoding="utf-8"):
-            gi.write_text(gitignore, encoding="utf-8")
-            self._commit("chore: ignore candidates/ scratch dir")
+        gi = self.root / ".gitignore"
+        # Rewrite whenever missing or stale — unconditionally, not gated on ``.git``
+        # existing (a crash between ``git init`` and the first write, or a manual
+        # ``git init``, used to leave it un-created and candidates/ tracked, M10).
+        if not gi.exists() or gi.read_text(encoding="utf-8") != _GITIGNORE:
+            gi.write_text(_GITIGNORE, encoding="utf-8")
+        # Idempotent: no-op when nothing is staged (already-initialized re-run).
+        self._commit("chore: initialize super-skill registry (.gitignore)")
 
     def _git(self, *args: str) -> str:
         proc = subprocess.run(
@@ -113,7 +118,13 @@ class Registry:
         p = self._meta_path(skill_id)
         if not p.exists():
             return None
-        return SkillRecord.model_validate_json(p.read_text(encoding="utf-8"))
+        try:
+            return SkillRecord.model_validate_json(p.read_text(encoding="utf-8"))
+        except ValidationError as e:
+            # A truncated/corrupt meta.json (crash mid-write, hand-edit) must
+            # surface as RegistryError so status/list/doctor report it cleanly
+            # rather than dying on a raw pydantic traceback (M12).
+            raise RegistryError(f"{skill_id}: corrupt meta.json ({e})") from e
 
     def list_skills(self) -> list[SkillRecord]:
         if not self.skills_root.exists():
@@ -145,6 +156,14 @@ class Registry:
         """Register a new immutable version; optionally make it the active pointer."""
         parsed = parse(raw)
         rec = self.get(skill_id) or SkillRecord(skill=Skill(skill_id=skill_id, scope=scope))
+        # Idempotent promotion (M8): re-adding content identical to the current
+        # active version is a no-op. Guards the approve crash window (candidate
+        # left 'pending' after commit) from double-promoting on re-run.
+        new_hash = content_hash(raw)
+        if make_active and rec.skill.active_version:
+            cur = rec.versions.get(rec.skill.active_version)
+            if cur is not None and cur.artifact_hash == new_hash:
+                return cur
         version = rec.next_version()
         parents = [rec.skill.active_version] if rec.skill.active_version else []
         sv = SkillVersion(
@@ -205,7 +224,11 @@ class Registry:
     def _write(self, rec: SkillRecord) -> None:
         p = self._meta_path(rec.skill.skill_id)
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(rec.model_dump_json(indent=2), encoding="utf-8")
+        # Atomic write: a crash mid-write must never leave a truncated meta.json
+        # (M12). Write to a sibling temp file, then os.replace (atomic rename).
+        tmp = p.with_suffix(".json.tmp")
+        tmp.write_text(rec.model_dump_json(indent=2), encoding="utf-8")
+        os.replace(tmp, p)
 
     # ---- distribution ------------------------------------------------------
     def materialize(self, skill_id: str, host_dir: Path) -> Path:

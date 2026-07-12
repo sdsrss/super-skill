@@ -7,9 +7,12 @@ events are TTL-bounded (FR-CAP-6); structured products live elsewhere.
 
 from __future__ import annotations
 
+import os
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
+
+from pydantic import ValidationError
 
 from . import config
 from .redact import redact_payload, redact_text
@@ -53,8 +56,15 @@ class EventLog:
         day = event.timestamp.strftime("%Y-%m-%d")
         out = self.events_dir / day / "events.jsonl"
         out.parent.mkdir(parents=True, exist_ok=True)
-        with out.open("a", encoding="utf-8") as f:
-            f.write(event.model_dump_json() + "\n")
+        # One atomic append per event: a single O_APPEND os.write, not a buffered
+        # writer that can split a large line into multiple write() calls and let
+        # two concurrent captures interleave into a corrupt line (H4).
+        data = (event.model_dump_json() + "\n").encode("utf-8")
+        fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        try:
+            os.write(fd, data)
+        finally:
+            os.close(fd)
         return event
 
     def iter_events(self) -> Iterator[CaptureEvent]:
@@ -66,11 +76,20 @@ class EventLog:
                 continue
             for line in wal.read_text(encoding="utf-8").splitlines():
                 line = line.strip()
-                if line:
+                if not line:
+                    continue
+                try:
                     yield CaptureEvent.model_validate_json(line)
+                except ValidationError:
+                    # A killed hook can leave a torn final line; one bad record
+                    # must not brick every reader (status/mine/count). Skip it.
+                    continue
 
     def count(self) -> int:
         return sum(1 for _ in self.iter_events())
 
+    def session_ids(self) -> set[str]:
+        return {ev.session_id for ev in self.iter_events()}
+
     def distinct_sessions(self) -> int:
-        return len({ev.session_id for ev in self.iter_events()})
+        return len(self.session_ids())
