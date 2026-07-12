@@ -30,7 +30,13 @@ def test_codex_meta_skill_open_standard_frontmatter():
 def test_install_script_exists_executable_and_targets_agents_skills():
     sh = CODEX / "install.sh"
     assert sh.exists()
-    assert os.access(sh, os.X_OK), "codex/install.sh must be executable"
+    # Check the git-tracked mode, not the working-tree FS mode: some mounts
+    # report every file as executable, which would false-green os.access here.
+    mode = subprocess.run(
+        ["git", "ls-files", "--stage", "codex/install.sh"],
+        cwd=ROOT, capture_output=True, text=True, check=True,
+    ).stdout.split()[0]
+    assert mode == "100755", f"codex/install.sh must be committed executable, got {mode}"
     body = sh.read_text(encoding="utf-8")
     assert ".agents/skills" in body
     assert "mkdir -p" in body  # idempotent create
