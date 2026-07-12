@@ -1,14 +1,29 @@
 [project]
-name = "super-skill"
-version = "0.7.0"
+name = "super-skill-cli"
+version = "0.8.0"
 description = "Personal Agent-Skill package manager: versioned registry, seed import, explain, rollback (M0+WS scope)."
 readme = "README.md"
 requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "sdsrss", email = "sammuaicode@gmail.com" }]
+keywords = ["claude-code", "agent-skills", "skill-manager", "registry", "package-manager"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Build Tools",
+]
 dependencies = [
     "pydantic>=2.6",
     "typer>=0.12",
     "pyyaml>=6.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/sdsrss/super-skill"
+Repository = "https://github.com/sdsrss/super-skill"
 
 [project.scripts]
 super-skill = "super_skill.cli:app"

@@ -1,0 +1,23 @@
+{
+  "description": "Wire the six Claude Code host events to `super-skill capture` so real sessions accumulate into super-skill's redacted WAL (needed for `super-skill mine`). capture reads the hook JSON on stdin and never fails the session. Requires the `super-skill` CLI on PATH (uv tool install super-skill-cli / pipx install super-skill-cli). If your Claude Code build does not auto-load plugin hooks, run `super-skill hooks-config` and merge its output into settings.json instead.",
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [ { "type": "command", "command": "super-skill capture" } ] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [ { "type": "command", "command": "super-skill capture" } ] }
+    ],
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "super-skill capture" } ] }
+    ],
+    "SessionEnd": [
+      { "hooks": [ { "type": "command", "command": "super-skill capture" } ] }
+    ],
+    "PreToolUse": [
+      { "matcher": "*", "hooks": [ { "type": "command", "command": "super-skill capture" } ] }
+    ],
+    "PostToolUse": [
+      { "matcher": "*", "hooks": [ { "type": "command", "command": "super-skill capture" } ] }
+    ]
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "name": "super-skill",
+  "version": "0.8.0",
+  "description": "Personal Agent-Skill package manager: a git-backed, versioned registry for your Claude Code skills with seed import, provenance/explain, one-command rollback, integrity doctor, and opportunity mining from captured sessions.",
+  "author": {
+    "name": "sdsrss",
+    "url": "https://github.com/sdsrss"
+  },
+  "repository": "https://github.com/sdsrss/super-skill",
+  "license": "MIT",
+  "keywords": ["claude-code", "agent-skills", "skill-manager", "registry", "package-manager"]
+}

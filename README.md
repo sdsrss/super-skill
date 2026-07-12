@@ -10,6 +10,34 @@ deferred research track — a GATE-1 measurement of the author's own history sho
 the candidate opportunity flow does not yet clear the ≥10-family threshold that
 would justify building it. See `docs/` for the full plan (not distributed).
 
+## Install
+
+**As a Claude Code plugin** (slash commands + a meta-skill + auto-wired capture hooks):
+
+```
+/plugin marketplace add sdsrss/super-skill
+/plugin install super-skill
+```
+
+This gives you `/super-skill:status`, `/super-skill:mine`, `/super-skill:doctor`,
+`/super-skill:candidates`, `/super-skill:seed`, and a `super-skill` skill Claude
+invokes when you ask to version, explain, or roll back a skill. The plugin drives
+the `super-skill` CLI, so install that too:
+
+**The CLI** (the plugin, hooks, and slash commands all call `super-skill` on your PATH):
+
+```bash
+uv tool install super-skill-cli      # or: pipx install super-skill-cli
+super-skill status                   # command name stays `super-skill`
+```
+
+The distribution is named **`super-skill-cli`** on PyPI (the plain `super-skill`
+name belongs to an unrelated package); the installed command is `super-skill`.
+For a one-shot run without installing: `uvx --from super-skill-cli super-skill status`.
+
+Codex packaging is a deferred P1 (Codex reads the canonical `~/.agents/skills`
+directly; a Codex plugin wrapper is not built yet).
+
 ## Develop
 
 Uses [uv](https://docs.astral.sh/uv/).
