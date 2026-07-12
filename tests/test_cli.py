@@ -195,6 +195,32 @@ def test_doctor_cli_healthy_and_error(env):
     assert "error" in r.output and "hash mismatch" in r.output
 
 
+def test_doctor_fix_cli(env):
+    host = env
+    _make_skill(host, "alpha", "first skill")
+    runner.invoke(app, ["seed"])
+    from super_skill import config
+    from super_skill.registry import Registry
+
+    reg = Registry(root=config.state_root())
+    p = reg.skills_root / "alpha" / "versions" / "v1" / "SKILL.md"
+
+    # tamper -> --fix restores from git and re-verifies clean (exit 0)
+    p.write_text("---\nname: alpha\ndescription: first skill\n---\nHACKED\n")
+    r = runner.invoke(app, ["doctor", "--fix"])
+    assert r.exit_code == 0, r.output
+    assert "restored" in r.output and "0 error(s) remain" in r.output
+    assert "HACKED" not in p.read_text()
+
+    # an unfixable error (dangling pointer) survives --fix and exits 1
+    rec = reg.get("alpha")
+    rec.skill.active_version = "v99"
+    reg._write(rec)
+    r = runner.invoke(app, ["doctor", "--fix"])
+    assert r.exit_code == 1
+    assert "needs manual fix" in r.output
+
+
 def test_hooks_config_cli(env):
     import json as _json
 
