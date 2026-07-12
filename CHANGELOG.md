@@ -3,6 +3,15 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic versioning.
 
+## [0.5.0] - 2026-07-12
+
+### Added
+- **`doctor --fix`** — mechanical repair. Restores tampered/missing versions from
+  git HEAD (the committed, correct content) and re-materializes host drift, then
+  **re-verifies**: the exit status reflects what remains after the fix, not what
+  was attempted. Issues needing judgment (a dangling active pointer, a name
+  mismatch) are reported for manual resolution rather than auto-changed.
+
 ## [0.4.0] - 2026-07-12
 
 Hardens the v1 package manager.
