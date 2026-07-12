@@ -1,0 +1,108 @@
+{
+  "arms": {
+    "none": {
+      "case1": [
+        true,
+        true,
+        true
+      ],
+      "case2": [
+        true,
+        true,
+        true
+      ],
+      "case3": [
+        true,
+        true,
+        true
+      ],
+      "case4": [
+        true,
+        true,
+        true
+      ],
+      "case5": [
+        true,
+        true,
+        true
+      ]
+    },
+    "hybrid": {
+      "case1": [
+        true,
+        true,
+        true
+      ],
+      "case2": [
+        true,
+        true,
+        true
+      ],
+      "case3": [
+        true,
+        true,
+        true
+      ],
+      "case4": [
+        true,
+        true,
+        true
+      ],
+      "case5": [
+        true,
+        true,
+        true
+      ]
+    },
+    "handwritten": {
+      "case1": [
+        true,
+        true,
+        true
+      ],
+      "case2": [
+        true,
+        true,
+        true
+      ],
+      "case3": [
+        true,
+        true,
+        true
+      ],
+      "case4": [
+        true,
+        true,
+        true
+      ],
+      "case5": [
+        true,
+        true,
+        true
+      ]
+    }
+  },
+  "negative_controls": {
+    "cases": [
+      "n1",
+      "n2"
+    ],
+    "runs_per_case": 3,
+    "hybrid_mistriggers": 0
+  },
+  "gates": {
+    "instruction_gate_pass": true,
+    "evallite_pass": true,
+    "secret_leak": false
+  },
+  "hours": {
+    "hybrid_total": 0.083,
+    "handwritten_total": 0.016
+  },
+  "provenance": {
+    "mined": 8,
+    "external": 2,
+    "prior": 0,
+    "ledger": "evals/release-family/pilot-log.md"
+  }
+}

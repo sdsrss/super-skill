@@ -1,0 +1,45 @@
+{
+  "arms": {
+    "none": {
+      "case1": [null, null, null],
+      "case2": [null, null, null],
+      "case3": [null, null, null],
+      "case4": [null, null, null],
+      "case5": [null, null, null]
+    },
+    "hybrid": {
+      "case1": [null, null, null],
+      "case2": [null, null, null],
+      "case3": [null, null, null],
+      "case4": [null, null, null],
+      "case5": [null, null, null]
+    },
+    "handwritten": {
+      "case1": [null, null, null],
+      "case2": [null, null, null],
+      "case3": [null, null, null],
+      "case4": [null, null, null],
+      "case5": [null, null, null]
+    }
+  },
+  "negative_controls": {
+    "cases": ["n1", "n2"],
+    "runs_per_case": 3,
+    "hybrid_mistriggers": null
+  },
+  "gates": {
+    "instruction_gate_pass": null,
+    "evallite_pass": null,
+    "secret_leak": null
+  },
+  "hours": {
+    "hybrid_total": null,
+    "handwritten_total": null
+  },
+  "provenance": {
+    "mined": null,
+    "external": null,
+    "prior": null,
+    "ledger": "per-rule table lives in docs/11-path-b-pilot-report.md"
+  }
+}

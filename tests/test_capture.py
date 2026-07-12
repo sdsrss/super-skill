@@ -114,6 +114,43 @@ def test_mine_surfaces_recurring_family(tmp_path):
     assert all(f.session_count >= 3 for f in families)
 
 
+def test_mine_strips_harness_notification_envelope(tmp_path):
+    """Task-notification boilerplate (summary/note/ids/output-file/usage metrics)
+    is harness metadata, not task content — it dominated real mining output
+    (8 sessions / 31 events of pure template prose on 2026-07-12). It must not
+    mine into families, while content inside <result> still must."""
+    log = EventLog(root=tmp_path)
+    boiler = (
+        '<task-notification task-id="abc123">'
+        '<summary>Agent "Review detection" finished</summary>\n'
+        "<note>A task-notification fires each time this agent stops with no live "
+        "background children of its own. The user can send it another message and "
+        "resume it, so the same task-id may notify more than once.</note>\n"
+        "<tool-use-id>toolu_01ABCDEF</tool-use-id>\n"
+        "<output-file>/tmp/tasks/abc123.output</output-file>\n"
+        "<result>release tag push sequence verified clean</result>"
+        "</task-notification>\n"
+        "usage: subagent_tokens=512 tool_uses=5 duration_ms=1000"
+    )
+    for sid in ("s1", "s2", "s3"):
+        log.append(EventType.STOP, sid, {"last_assistant_message": boiler})
+    labels = " ".join(f.label for f in mine_families(log.iter_events(), min_sessions=3))
+    for meta in (
+        "task-notification",
+        "task-id",
+        "tool-use-id",
+        "output-file",
+        "subagent_tokens",
+        "tool_uses",
+        "duration_ms",
+        "another message",
+        "can send",
+        "notify",
+    ):
+        assert meta not in labels, f"harness metadata mined: {meta}"
+    assert "tag push" in labels  # <result> content still mines
+
+
 def test_mine_empty(tmp_path):
     assert mine_families(EventLog(root=tmp_path).iter_events()) == []
 

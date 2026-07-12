@@ -127,6 +127,9 @@ def mine(min_sessions: int = typer.Option(3, "--min-sessions")) -> None:
     log = EventLog()
     session_ids = log.session_ids()
     families = mine_families(log.iter_events(), min_sessions=min_sessions)
+    # Acknowledge BEFORE printing: `mine | head` dies of SIGPIPE mid-listing,
+    # and the watermark write must survive the broken pipe (D#67).
+    minestate.record_mined(log.root, session_ids)
     if not families:
         typer.echo(
             f"no families recurring across >={min_sessions} sessions yet "
@@ -136,8 +139,6 @@ def mine(min_sessions: int = typer.Option(3, "--min-sessions")) -> None:
         typer.echo(f"{'sessions':>8}  {'events':>6}  family")
         for fam in families:
             typer.echo(f"{fam.session_count:>8}  {fam.event_count:>6}  {fam.label}")
-    # Mining acknowledges the accumulated sessions: reset the reminder watermark.
-    minestate.record_mined(log.root, session_ids)
 
 
 @app.command()
