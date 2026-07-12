@@ -14,8 +14,9 @@ if [ ! -f "${SRC}/SKILL.md" ]; then
 fi
 
 mkdir -p "${DEST}"
-cp "${SRC}/SKILL.md" "${DEST}/SKILL.md"
-echo "installed super-skill meta-skill -> ${DEST}/SKILL.md"
+# Copy the whole skill tree: SKILL.md + optional agents/openai.yaml (host extension).
+cp -R "${SRC}/." "${DEST}/"
+echo "installed super-skill meta-skill -> ${DEST}/ (SKILL.md + agents/openai.yaml)"
 
 if ! command -v super-skill >/dev/null 2>&1; then
   echo "note: the 'super-skill' CLI is not on PATH — install it with:" >&2

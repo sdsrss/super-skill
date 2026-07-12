@@ -1,0 +1,12 @@
+# Codex host-extension metadata (OPTIONAL). Only SKILL.md is required; this file
+# adds Codex-specific UI + invocation hints. Schema per the Codex build-skills
+# docs (learn.chatgpt.com/docs/build-skills): interface / policy / dependencies.
+# Kept to the fields super-skill actually needs — a CLI-driven manager, not an
+# MCP tool, so no dependencies block.
+interface:
+  display_name: super-skill
+  short_description: Version, roll back, and audit your Agent Skills.
+policy:
+  # true = Codex may auto-select this skill from the user's prompt;
+  # false would require an explicit $super-skill invocation.
+  allow_implicit_invocation: true
