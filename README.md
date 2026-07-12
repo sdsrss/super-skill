@@ -31,7 +31,13 @@ uv run super-skill list       # skills with active version + description
 uv run super-skill show <id>  # frontmatter, versions, hashes
 uv run super-skill explain <id>          # provenance chain + audit + rollback hint
 uv run super-skill rollback <id> [--to vN]   # switch active pointer, re-materialize to host
+uv run super-skill doctor                # registry integrity check (hashes, pointers, host sync)
 ```
+
+`doctor` is read-only: it re-hashes every stored version against the hash
+recorded at promotion (catching tampering or a hand-edit that bypassed the
+registry), checks the active pointer resolves, and reports host drift. It exits 1
+on an integrity error; fixes are yours to run (`rollback` / `seed` / re-approve).
 
 Capture → mine → approve loop:
 

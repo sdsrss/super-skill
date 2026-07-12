@@ -174,6 +174,27 @@ def test_candidate_approve_blocked_by_gate_cli(env):
     assert not (host / cid).exists()  # never materialized
 
 
+def test_doctor_cli_healthy_and_error(env):
+    host = env
+    _make_skill(host, "alpha", "first skill")
+    runner.invoke(app, ["seed"])
+
+    r = runner.invoke(app, ["doctor"])
+    assert r.exit_code == 0
+    assert "OK" in r.output
+
+    # tamper a stored version -> doctor must flag an error and exit 1
+    from super_skill import config
+    from super_skill.registry import Registry
+
+    reg = Registry(root=config.state_root())
+    p = reg.skills_root / "alpha" / "versions" / "v1" / "SKILL.md"
+    p.write_text("---\nname: alpha\ndescription: first skill\n---\nHACKED\n")
+    r = runner.invoke(app, ["doctor"])
+    assert r.exit_code == 1
+    assert "error" in r.output and "hash mismatch" in r.output
+
+
 def test_hooks_config_cli(env):
     import json as _json
 
