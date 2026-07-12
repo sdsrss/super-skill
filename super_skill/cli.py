@@ -90,31 +90,42 @@ def mine(min_sessions: int = typer.Option(3, "--min-sessions")) -> None:
 
 @app.command()
 def status() -> None:
-    """Registry summary: location, git head, skill/version counts."""
+    """Registry summary: location, git head, skill/version/candidate counts."""
     reg = _registry()
     records = reg.list_skills()
     active = sum(1 for r in records if r.skill.active_version)
     versions = sum(len(r.versions) for r in records)
+    cands = CandidateStore(reg.root).list()
+    by_status: dict[str, int] = {}
+    for c in cands:
+        by_status[c.status] = by_status.get(c.status, 0) + 1
+    breakdown = ", ".join(f"{n} {s}" for s, n in sorted(by_status.items())) or "none"
     typer.echo(f"state root : {reg.root}")
     typer.echo(f"git head   : {reg.head()}")
     typer.echo(f"skills     : {len(records)} ({active} active)")
     typer.echo(f"versions   : {versions}")
     typer.echo(f"events     : {EventLog(reg.root).count()}")
+    typer.echo(f"candidates : {len(cands)} ({breakdown})")
 
 
 @app.command("list")
 def list_() -> None:
-    """List registered skills with their active version and description."""
+    """List registered skills plus any pending candidates awaiting approval."""
     reg = _registry()
     records = reg.list_skills()
     if not records:
         typer.echo("no skills registered — run `super-skill seed`")
-        return
     for r in records:
         av = r.active
         ver = r.skill.active_version or "-"
         desc = _short(av.frontmatter.description) if av else ""
         typer.echo(f"{r.skill.skill_id:<32} {ver:<5} {desc}")
+
+    pending = [c for c in CandidateStore(reg.root).list() if c.status == "pending"]
+    if pending:
+        typer.echo(f"\npending candidates ({len(pending)}) — review with `candidate show <id>`:")
+        for c in pending:
+            typer.echo(f"  {c.candidate_id:<30} {c.session_count} sessions  {c.family_label}")
 
 
 @app.command()

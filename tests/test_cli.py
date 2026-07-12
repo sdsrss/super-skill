@@ -195,6 +195,49 @@ def test_doctor_cli_healthy_and_error(env):
     assert "error" in r.output and "hash mismatch" in r.output
 
 
+def test_status_and_list_show_candidates(env):
+    import json
+
+    for sid in ("s1", "s2", "s3"):
+        payload = json.dumps({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": sid,
+            "text": "dependency resolution failure in lockfile",
+        })
+        runner.invoke(app, ["capture"], input=payload)
+    runner.invoke(app, ["candidate", "draft"])
+
+    r = runner.invoke(app, ["status"])
+    assert "candidates :" in r.output and "pending" in r.output
+
+    r = runner.invoke(app, ["list"])
+    assert "pending candidates" in r.output and "dependency-resolution" in r.output
+
+
+def test_status_no_candidates_reads_none(env):
+    r = runner.invoke(app, ["seed"])
+    r = runner.invoke(app, ["status"])
+    assert "candidates : 0 (none)" in r.output
+
+
+def test_rollback_to_unknown_version_fails(env):
+    host = env
+    _make_skill(host, "alpha", "one")
+    runner.invoke(app, ["seed"])
+    r = runner.invoke(app, ["rollback", "alpha", "--to", "v99"])
+    assert r.exit_code == 1
+
+
+def test_capture_without_session_id_defaults_unknown(env):
+    r = runner.invoke(app, ["capture"], input='{"hook_event_name": "Stop"}')
+    assert r.exit_code == 0
+    from super_skill import config
+    from super_skill.capture import EventLog
+
+    ev = next(iter(EventLog(config.state_root()).iter_events()))
+    assert ev.session_id == "unknown"
+
+
 def test_doctor_fix_cli(env):
     host = env
     _make_skill(host, "alpha", "first skill")

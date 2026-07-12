@@ -70,6 +70,16 @@ def test_mine_empty(tmp_path):
     assert mine_families(EventLog(root=tmp_path).iter_events()) == []
 
 
+def test_mine_below_session_threshold_is_empty(tmp_path):
+    """A family recurring in only 2 sessions must not surface at min_sessions=3."""
+    log = EventLog(root=tmp_path)
+    for sid in ("s1", "s2"):  # two distinct sessions only
+        log.append(EventType.USER_PROMPT_SUBMIT, sid, {"text": "flaky retry pipeline stall"})
+    assert mine_families(log.iter_events(), min_sessions=3) == []
+    # lowering the threshold to 2 surfaces it
+    assert mine_families(log.iter_events(), min_sessions=2)
+
+
 def test_mine_ignores_envelope_and_redaction_noise(tmp_path):
     """Coarse mining must surface task content, not the hook envelope (event name,
     session id, cwd) or redaction placeholders — those produce junk families."""
