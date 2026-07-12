@@ -35,8 +35,18 @@ The distribution is named **`super-skill-cli`** on PyPI (the plain `super-skill`
 name belongs to an unrelated package); the installed command is `super-skill`.
 For a one-shot run without installing: `uvx --from super-skill-cli super-skill status`.
 
-Codex packaging is a deferred P1 (Codex reads the canonical `~/.agents/skills`
-directly; a Codex plugin wrapper is not built yet).
+**For Codex** — Codex has no marketplace; it reads open-standard `SKILL.md` from
+`~/.agents/skills`. Install the same CLI plus the meta-skill:
+
+```bash
+pipx install super-skill-cli          # or: uv tool install super-skill-cli
+codex/install.sh                      # drops the meta-skill into ~/.agents/skills
+```
+
+Point the CLI at the Codex skills dir with `SUPER_SKILL_HOST_SKILLS=~/.agents/skills`.
+See `codex/README.md`. (A Codex Target Adapter *inside* the CLI — FR-PUB-2 — is
+still P1; distributing produced skills to Codex needs no extra step since they
+already live in `~/.agents/skills`.)
 
 ## Develop
 
