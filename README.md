@@ -1,102 +1,192 @@
+<!-- SEO: Claude Code Agent Skills package manager — version control, rollback, provenance, integrity checks for ~/.claude/skills and ~/.agents/skills (Codex). -->
+
 # super-skill
 
-Personal Agent-Skill package manager: a git-backed, versioned registry for your
-Claude Code / Codex skills, with seed import, provenance/explain, and one-command
-rollback.
+**Version control, rollback, and provenance for your Claude Code and Codex Agent Skills.**
+super-skill is a git-backed package manager for the skills in `~/.claude/skills`
+(and Codex's `~/.agents/skills`): it puts every skill under version history,
+tells you where each one came from, rolls any skill back with one command, and
+checks the registry for tampering — with secret-redacted session capture and
+safety-gated promotion built in.
 
-Scope is deliberately the **M0+WS package-manager** form. The self-learning loop
-(candidate mining → optimization → evaluation → promotion, milestones M2–M5) is a
-deferred research track — a GATE-1 measurement of the author's own history showed
-the candidate opportunity flow does not yet clear the ≥10-family threshold that
-would justify building it. See `docs/` for the full plan (not distributed).
+**English** · [简体中文](README.zh-CN.md)
+
+---
+
+## Why super-skill
+
+Agent Skills are just Markdown files in a directory. That directory has no
+history: edit a `SKILL.md` and the previous version is gone; you can't tell which
+skill came from where, why it's there, or whether one was quietly changed. There
+is no undo.
+
+super-skill treats your skills like packages: **versioned, auditable, reversible.**
+
+## Highlights
+
+- **One-command rollback** — a skill regressed? `super-skill rollback <id>` switches
+  the active version and re-materializes it to your skills directory.
+- **Provenance & audit** — `super-skill explain <id>` answers *why does this skill
+  exist, where did it come from, how do I undo it* from an immutable audit trail.
+- **Tamper detection** — `super-skill doctor` re-hashes every stored version against
+  the hash recorded at promotion; `--fix` restores git-recoverable versions.
+- **Redaction before disk** — session capture strips secrets and private paths
+  *before* anything is written; secret values never reach the log.
+- **Safety-gated promotion** — a candidate becomes a skill only through two hard
+  gates (an instruction-layer adversarial scan + a deterministic eval-lite).
+- **Runs where your agent runs** — a Claude Code plugin, a Codex install package,
+  and a host-agnostic CLI, all driven by the same `super-skill` command.
 
 ## Install
 
-**As a Claude Code plugin** (slash commands + a meta-skill + auto-wired capture hooks):
+### Claude Code (plugin)
 
 ```
 /plugin marketplace add sdsrss/super-skill
 /plugin install super-skill
 ```
 
-This gives you `/super-skill:status`, `/super-skill:mine`, `/super-skill:doctor`,
-`/super-skill:candidates`, `/super-skill:seed`, and a `super-skill` skill Claude
-invokes when you ask to version, explain, or roll back a skill. The plugin drives
-the `super-skill` CLI, so install that too:
+Adds slash commands (`/super-skill:status`, `:mine`, `:doctor`, `:candidates`,
+`:seed`), a `super-skill` skill Claude invokes when you ask to version, explain,
+or roll back a skill, and capture hooks. The plugin drives the CLI, so install
+that too:
 
-**The CLI** (the plugin, hooks, and slash commands all call `super-skill` on your PATH):
+### CLI
 
 ```bash
 uv tool install super-skill-cli      # or: pipx install super-skill-cli
-super-skill status                   # command name stays `super-skill`
+super-skill status                   # the command is `super-skill`
 ```
 
-The distribution is named **`super-skill-cli`** on PyPI (the plain `super-skill`
-name belongs to an unrelated package); the installed command is `super-skill`.
-For a one-shot run without installing: `uvx --from super-skill-cli super-skill status`.
+The PyPI distribution is **`super-skill-cli`** (the bare `super-skill` name
+belongs to an unrelated package); the installed command is `super-skill`.
+One-shot, no install: `uvx --from super-skill-cli super-skill status`.
 
-**For Codex** — Codex has no marketplace; it reads open-standard `SKILL.md` from
-`~/.agents/skills`. Install the same CLI plus the meta-skill:
+### Codex
+
+Codex reads open-standard `SKILL.md` from `~/.agents/skills` — no marketplace
+needed:
 
 ```bash
-pipx install super-skill-cli          # or: uv tool install super-skill-cli
-codex/install.sh                      # drops the meta-skill into ~/.agents/skills
+pipx install super-skill-cli
+codex/install.sh                     # drops the meta-skill into ~/.agents/skills
 ```
 
-Point the CLI at the Codex skills dir with `SUPER_SKILL_HOST_SKILLS=~/.agents/skills`.
-See `codex/README.md`. (A Codex Target Adapter *inside* the CLI — FR-PUB-2 — is
-still P1; distributing produced skills to Codex needs no extra step since they
-already live in `~/.agents/skills`.)
+Point the CLI at the Codex directory with `SUPER_SKILL_HOST_SKILLS=~/.agents/skills`.
+See [`codex/README.md`](codex/README.md).
+
+## Features
+
+| Command | What it does |
+|---|---|
+| `seed` | Import existing `~/.claude/skills` under version control — read-only on the host, idempotent by content hash. |
+| `status` / `list` | Registry summary (skills, versions, events, candidates) and the skill list. |
+| `show <id>` | Frontmatter, version history, and content hashes for one skill. |
+| `explain <id>` | Provenance chain + audit trail + the exact rollback command. |
+| `rollback <id> [--to vN]` | Switch the active version and re-materialize it to the host. |
+| `doctor` / `doctor --fix` | Integrity check (hashes, active pointer, host sync); `--fix` restores git-recoverable versions and re-materializes drift, then re-verifies. |
+| `capture` | Append a host event to the redacted WAL — reads hook JSON on stdin, never fails the session. |
+| `mine` | Surface task families recurring across ≥3 distinct sessions; nudges you once enough new sessions accumulate. |
+| `candidate draft/show/approve/reject` | Turn a mined family into a skill: draft → review → two hard gates → promote & materialize. |
+| `hooks-config` | Print the `settings.json` hooks block that wires session capture. |
+
+State lives in `~/.super-skill/` — a real git repository, so **audit and rollback
+are git.**
+
+## How it's different
+
+|  | Plain `~/.claude/skills` | super-skill |
+|---|:---:|:---:|
+| Version history per skill | ✗ | ✓ (git-backed DAG) |
+| One-command rollback | ✗ | ✓ |
+| Provenance / "why is this here" | ✗ | ✓ |
+| Tamper / drift detection | ✗ | ✓ (`doctor`) |
+| Secret redaction on capture | ✗ | ✓ (before disk) |
+| Safety-gated promotion | ✗ | ✓ (two hard gates) |
+| Claude Code **and** Codex | manual | ✓ one CLI |
+
+super-skill is a **package manager, not a skill generator**: it manages, versions,
+and audits the skills you already have or approve — it does not write skills for
+you or change their behavior behind your back. Every write path is explicit and
+reversible; your skills directory is only ever written on `approve`, `rollback`,
+or `doctor --fix` (`seed` reads it but never modifies it).
+
+## Usage
+
+```bash
+# Bring your current skills under version control
+super-skill seed
+super-skill status
+
+# See where a skill came from and how to undo it
+super-skill explain my-skill
+
+# Undo a bad change
+super-skill rollback my-skill
+
+# Check nothing was tampered with; repair recoverable drift
+super-skill doctor
+super-skill doctor --fix
+
+# Turn recurring work into a skill (capture must be wired first — see hooks-config)
+super-skill mine
+super-skill candidate draft
+super-skill candidate show <id>      # edit the draft, then:
+super-skill candidate approve <id>
+```
+
+## Configuration
+
+| Env var | Default | Purpose |
+|---|---|---|
+| `SUPER_SKILL_HOME` | `~/.super-skill` | Registry + control state (a git repo). |
+| `SUPER_SKILL_HOST_SKILLS` | `~/.claude/skills` | Skills directory to seed/materialize (set to `~/.agents/skills` for Codex). |
+| `SUPER_SKILL_MINE_REMINDER` | `3` | Distinct unmined sessions before `status` nudges you to mine. |
+
+## Scope
+
+super-skill is deliberately the **package-manager** form (milestones M0 + WS). The
+self-learning loop — automatically optimizing, distilling, and promoting skills
+(milestones M1–M5) — is a **deferred research track**: a measurement of real usage
+did not clear the threshold that would justify building it, so v1 is frozen as a
+package manager with audit and rollback. It does not self-evolve your skills, and
+this README does not imply it does.
+
+## FAQ
+
+**Does super-skill run or change my skills' behavior?**
+No. It manages the files (version, audit, rollback, integrity) and never edits a
+skill's content on its own. Approving a candidate promotes a draft *you* reviewed.
+
+**Will it touch `~/.claude/skills` without asking?**
+Three commands write there — `approve` (promote a reviewed candidate), `rollback`,
+and `doctor --fix`. `seed` reads your skills into the registry but never modifies
+them; `status`/`list`/`show`/`explain`/`doctor` are read-only.
+
+**Are my secrets safe in captured sessions?**
+Redaction runs *before* any write: secret values and private paths never reach the
+log. Capture is off until you wire it (`super-skill hooks-config`).
+
+**Do I need PyPI for the plugin to work?**
+The plugin calls the `super-skill` CLI on your PATH. Until the PyPI release,
+install the CLI from source: `uv tool install git+https://github.com/sdsrss/super-skill`.
+
+**Does it support Codex?**
+Yes — the same CLI plus a `codex/` install package for `~/.agents/skills`. A Codex
+*Target Adapter inside the CLI* is a later item; distributing skills to Codex needs
+no extra step since they already live in `~/.agents/skills`.
 
 ## Develop
 
-Uses [uv](https://docs.astral.sh/uv/).
+Uses [uv](https://docs.astral.sh/uv/). Python 3.12.
 
 ```bash
-uv sync                       # create venv, install deps
+uv sync                       # venv + deps
 uv run pytest                 # tests
-uv run pytest tests/test_seed.py::test_seed_is_idempotent   # single test
 uv run ruff check .           # lint
 uv run mypy super_skill/      # typecheck
 ```
 
-## Use
+## License
 
-```bash
-uv run super-skill seed       # import ~/.claude/skills into the registry (read-only on host)
-uv run super-skill status     # registry location, git head, counts
-uv run super-skill list       # skills with active version + description
-uv run super-skill show <id>  # frontmatter, versions, hashes
-uv run super-skill explain <id>          # provenance chain + audit + rollback hint
-uv run super-skill rollback <id> [--to vN]   # switch active pointer, re-materialize to host
-uv run super-skill doctor                # registry integrity check (hashes, pointers, host sync)
-uv run super-skill doctor --fix          # restore git-recoverable versions + re-materialize drift
-```
-
-`doctor` is read-only: it re-hashes every stored version against the hash
-recorded at promotion (catching tampering or a hand-edit that bypassed the
-registry), checks the active pointer resolves, and reports host drift. It exits 1
-on an integrity error. `--fix` restores tampered/missing versions from git HEAD
-and re-materializes host drift, then **re-verifies** — the exit status reflects
-what remains, not what was attempted. Issues needing judgment (a dangling active
-pointer, a name mismatch) are left for you (`rollback` / `seed` / re-approve).
-
-Capture → mine → approve loop:
-
-```bash
-uv run super-skill hooks-config          # print the settings.json hooks block (merge it yourself)
-uv run super-skill capture               # append one host hook event (JSON on stdin); never fails
-uv run super-skill mine                  # surface task families recurring across ≥3 sessions
-uv run super-skill candidate draft       # scaffold candidates from mined families (TODO-stubs)
-uv run super-skill candidate show <id>   # draft + gate findings + eval-lite result
-uv run super-skill candidate approve <id># promote to registry + materialize to host
-```
-
-`approve` runs two hard gates before any write: the instruction-layer adversarial
-gate (rejects `curl|bash` / credential / `ignore previous` imperatives) and a
-deterministic eval-lite (schema, zero secret leak, token budget). The No Skill /
-Skill two-arm is labelled *Insufficient Evidence* at personal scale. To wire real
-sessions in, run `hooks-config` and merge its output into `~/.claude/settings.json`.
-
-State lives in `~/.super-skill/` (a git repo — audit and rollback are git). Override
-with `SUPER_SKILL_HOME`; override the host skills dir with `SUPER_SKILL_HOST_SKILLS`.
+[MIT](LICENSE) © sdsrss

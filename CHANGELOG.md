@@ -3,6 +3,16 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic versioning.
 
+## [0.9.2] - 2026-07-12
+
+### Changed
+- **README rewritten and aligned to shipped features** — bilingual (English
+  default + `README.zh-CN.md`), with install (Claude Code plugin / CLI / Codex),
+  a feature table, a differentiation comparison, usage, configuration, an honest
+  scope note, and an FAQ. Corrected the write-path description: the host skills
+  directory is written by `approve` / `rollback` / `doctor --fix` (`seed` is
+  read-only on the host). Added a GitHub repo description and topics.
+
 ## [0.9.1] - 2026-07-12
 
 ### Fixed
