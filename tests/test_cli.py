@@ -104,3 +104,39 @@ def test_capture_malformed_input_never_fails(env):
 
     r = runner.invoke(app, ["capture"], input='{"hook_event_name": "Bogus"}')
     assert r.exit_code == 0  # unknown event type -> no-op, still 0
+
+
+def test_candidate_flow_cli(env):
+    import json
+
+    host = env
+    for sid in ("s1", "s2", "s3"):
+        payload = json.dumps({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": sid,
+            "text": "dependency resolution failure in lockfile",
+        })
+        assert runner.invoke(app, ["capture"], input=payload).exit_code == 0
+
+    r = runner.invoke(app, ["candidate", "draft"])
+    assert r.exit_code == 0, r.output
+    assert "drafted" in r.output
+
+    r = runner.invoke(app, ["candidate", "list"])
+    assert "pending" in r.output
+
+    # approve the first drafted candidate and check it lands in the host + registry
+    cid = "dependency-resolution"
+    r = runner.invoke(app, ["candidate", "show", cid])
+    assert r.exit_code == 0 and "SKILL.md" in r.output
+
+    r = runner.invoke(app, ["candidate", "approve", cid, "--reason", "reusable"])
+    assert r.exit_code == 0, r.output
+    assert (host / cid / "SKILL.md").exists()
+
+    r = runner.invoke(app, ["list"])
+    assert cid in r.output
+
+    # re-approving the same candidate is refused (status already approved)
+    r = runner.invoke(app, ["candidate", "approve", cid])
+    assert r.exit_code == 1

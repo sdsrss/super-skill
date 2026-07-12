@@ -10,13 +10,17 @@ import sys
 import typer
 
 from . import config
+from .candidate import CandidateError, CandidateStore, approve, draft_from_families, reject
 from .capture import EventLog
 from .mine import mine_families
 from .registry import Registry, RegistryError
 from .schemas import EventType, OperationType
 from .seed import seed_from_host
+from .skillmd import SkillMdError
 
 app = typer.Typer(add_completion=False, help="Personal Agent-Skill package manager.")
+candidate_app = typer.Typer(help="Draft / review / approve skill candidates (mine -> approve).")
+app.add_typer(candidate_app, name="candidate")
 
 
 def _registry() -> Registry:
@@ -179,6 +183,82 @@ def rollback(
         typer.echo(str(e), err=True)
         raise typer.Exit(1) from e
     typer.echo(f"rolled back {skill_id} -> {to}; materialized {dest}")
+
+
+@candidate_app.command("draft")
+def candidate_draft(min_sessions: int = typer.Option(3, "--min-sessions")) -> None:
+    """Draft skill candidates from mined families (idempotent, pre-promotion)."""
+    families = mine_families(EventLog().iter_events(), min_sessions=min_sessions)
+    store = CandidateStore(config.state_root())
+    created = draft_from_families(store, families)
+    if not created:
+        typer.echo("no new candidates (nothing mined, or all already drafted)")
+        return
+    typer.echo(f"drafted {len(created)} candidate(s):")
+    for c in created:
+        typer.echo(f"  {c.candidate_id:<32} {c.session_count} sessions — edit then approve")
+
+
+@candidate_app.command("list")
+def candidate_list() -> None:
+    """List drafted candidates and their status."""
+    cands = CandidateStore(config.state_root()).list()
+    if not cands:
+        typer.echo("no candidates — run `super-skill candidate draft`")
+        return
+    for c in cands:
+        typer.echo(
+            f"{c.candidate_id:<32} {c.status:<9} "
+            f"{c.session_count} sessions  {c.family_label}"
+        )
+
+
+@candidate_app.command("show")
+def candidate_show(candidate_id: str) -> None:
+    """Show a candidate's metadata and drafted SKILL.md."""
+    store = CandidateStore(config.state_root())
+    cand = store.get(candidate_id)
+    if cand is None:
+        typer.echo(f"unknown candidate: {candidate_id}", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"candidate  : {cand.candidate_id} ({cand.status})")
+    typer.echo(f"family     : {cand.family_label}")
+    typer.echo(f"recurrence : {cand.session_count} sessions, {cand.event_count} events")
+    if cand.version:
+        typer.echo(f"promoted   : {cand.skill_id}@{cand.version}")
+    typer.echo("--- SKILL.md ---")
+    typer.echo(store.skill_md(candidate_id))
+
+
+@candidate_app.command("approve")
+def candidate_approve(
+    candidate_id: str,
+    reason: str = typer.Option("", "--reason"),
+) -> None:
+    """Approve a candidate: promote to the registry and materialize to the host."""
+    store = CandidateStore(config.state_root())
+    reg = _registry()
+    try:
+        sv = approve(store, reg, candidate_id, config.host_skills_dir(), reason=reason or None)
+    except (CandidateError, RegistryError, SkillMdError) as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1) from e
+    typer.echo(
+        f"approved {candidate_id} -> {sv.skill_id}@{sv.version}; "
+        f"materialized to {config.host_skills_dir() / sv.skill_id}"
+    )
+
+
+@candidate_app.command("reject")
+def candidate_reject(candidate_id: str) -> None:
+    """Mark a candidate rejected (leaves it on disk for the record)."""
+    store = CandidateStore(config.state_root())
+    try:
+        reject(store, candidate_id)
+    except CandidateError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1) from e
+    typer.echo(f"rejected {candidate_id}")
 
 
 if __name__ == "__main__":

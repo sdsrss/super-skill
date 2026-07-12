@@ -63,10 +63,17 @@ class Registry:
     # ---- lifecycle ---------------------------------------------------------
     def init(self) -> None:
         self.skills_root.mkdir(parents=True, exist_ok=True)
+        # candidates/ holds pre-promotion draft scratch — kept out of tracked
+        # history so only approve (the Publisher path) writes registry state.
+        gitignore = "locks/\ncandidates/\n"
+        gi = self.root / ".gitignore"
         if not (self.root / ".git").exists():
             self._git("init", "-q")
-            (self.root / ".gitignore").write_text("locks/\n", encoding="utf-8")
+            gi.write_text(gitignore, encoding="utf-8")
             self._commit("chore: initialize super-skill registry")
+        elif gi.exists() and "candidates/" not in gi.read_text(encoding="utf-8"):
+            gi.write_text(gitignore, encoding="utf-8")
+            self._commit("chore: ignore candidates/ scratch dir")
 
     def _git(self, *args: str) -> str:
         proc = subprocess.run(

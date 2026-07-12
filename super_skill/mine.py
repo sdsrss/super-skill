@@ -21,8 +21,21 @@ _STOP = frozenset(
     " error add change fix fixed test tests value values case cases new get set".split()
 )
 
+# Hook-envelope keys the CLI dumps wholesale into payload. They are metadata, not
+# task content, and dominate families ("userpromptsubmit x", cwd-derived slugs) if
+# mined — coarse mining should read content, not the envelope.
+_ENVELOPE_KEYS = frozenset(
+    "hook_event_name session_id event_id transcript_path cwd permission_mode"
+    " timestamp consent_scope tool_name".split()
+)
+
+# Redaction leaves ``[REDACTED:kind]`` / ``~`` placeholders; drop the whole
+# placeholder so "redacted" and the kind name don't become mined tokens.
+_REDACTION_RE = re.compile(r"\[REDACTED:[^\]]*\]")
+
 
 def _tokens(text: str) -> list[str]:
+    text = _REDACTION_RE.sub(" ", text)
     out = []
     for t in re.sub(r"[^a-z0-9/_.\- ]", " ", text.lower()).split():
         t = t.strip("-./_")
@@ -32,14 +45,15 @@ def _tokens(text: str) -> list[str]:
 
 
 def _event_text(ev: CaptureEvent) -> str:
-    parts: list[str] = [ev.event_type]
+    parts: list[str] = []
 
     def walk(o: object) -> None:
         if isinstance(o, str):
             parts.append(o)
         elif isinstance(o, dict):
-            for v in o.values():
-                walk(v)
+            for k, v in o.items():
+                if k not in _ENVELOPE_KEYS:  # skip envelope metadata, mine content
+                    walk(v)
         elif isinstance(o, list):
             for v in o:
                 walk(v)
