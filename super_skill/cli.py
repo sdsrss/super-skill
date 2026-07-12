@@ -12,7 +12,7 @@ import typer
 from . import config
 from .candidate import CandidateError, CandidateStore, approve, draft_from_families, reject
 from .capture import EventLog
-from .doctor import check_registry
+from .doctor import check_registry, repair
 from .evallite import EvalError, eval_lite
 from .gate import InstructionGateError, scan_skill_md
 from .hooks import hooks_settings
@@ -190,13 +190,39 @@ def rollback(
 
 
 @app.command()
-def doctor() -> None:
-    """Check registry integrity (read-only): hashes, pointers, host sync.
+def doctor(
+    fix: bool = typer.Option(False, "--fix", help="restore tampered/missing versions from git "
+                             "and re-materialize host drift, then re-verify"),
+) -> None:
+    """Check registry integrity: hashes, pointers, host sync.
 
-    Exits 1 if any integrity error is found; warnings (drift/cosmetic) do not.
-    Fixes are yours to run — `rollback`, `seed`, or re-materialize."""
+    Read-only by default; exits 1 if any integrity error is found. With --fix it
+    restores git-recoverable versions and re-materializes host drift, then
+    re-verifies — exit status reflects what remains, not what was attempted.
+    Dangling pointers / name mismatches need judgment and are left to you."""
     reg = _registry()
-    issues = check_registry(reg, config.host_skills_dir())
+    host = config.host_skills_dir()
+
+    if fix:
+        actions, remaining = repair(reg, host)
+        for a in actions:
+            mark = "✓" if a.ok else "✗"
+            typer.echo(f"  {mark} {a.issue.skill_id}: {a.action}")
+        if not actions:
+            typer.echo("doctor --fix: nothing mechanically fixable")
+        errors = [i for i in remaining if i.severity == "error"]
+        for i in remaining:
+            m = "✗" if i.severity == "error" else "!"
+            typer.echo(f"  {m} [{i.severity}] {i.skill_id}: {i.message} (needs manual fix)")
+        typer.echo(
+            f"doctor --fix: {len(actions)} action(s); "
+            f"{len(errors)} error(s) remain, {len(remaining) - len(errors)} warning(s)"
+        )
+        if errors:
+            raise typer.Exit(1)
+        return
+
+    issues = check_registry(reg, host)
     if not issues:
         typer.echo("doctor: OK — registry consistent, host in sync")
         return

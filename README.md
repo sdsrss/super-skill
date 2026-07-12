@@ -32,12 +32,16 @@ uv run super-skill show <id>  # frontmatter, versions, hashes
 uv run super-skill explain <id>          # provenance chain + audit + rollback hint
 uv run super-skill rollback <id> [--to vN]   # switch active pointer, re-materialize to host
 uv run super-skill doctor                # registry integrity check (hashes, pointers, host sync)
+uv run super-skill doctor --fix          # restore git-recoverable versions + re-materialize drift
 ```
 
 `doctor` is read-only: it re-hashes every stored version against the hash
 recorded at promotion (catching tampering or a hand-edit that bypassed the
 registry), checks the active pointer resolves, and reports host drift. It exits 1
-on an integrity error; fixes are yours to run (`rollback` / `seed` / re-approve).
+on an integrity error. `--fix` restores tampered/missing versions from git HEAD
+and re-materializes host drift, then **re-verifies** — the exit status reflects
+what remains, not what was attempted. Issues needing judgment (a dangling active
+pointer, a name mismatch) are left for you (`rollback` / `seed` / re-approve).
 
 Capture → mine → approve loop:
 
