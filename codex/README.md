@@ -22,22 +22,22 @@ codex/install.sh
 ## Use
 
 super-skill manages the skills in your skills directory (version, explain,
-rollback, integrity `doctor`, opportunity `mine`). Point it at the Codex dir:
+rollback, integrity `doctor`, opportunity `mine`). The CLI has a **Codex Target
+Adapter** — use `--host codex` (or `--host all`) to read from and write to Codex's
+`~/.agents/skills`:
 
 ```bash
-SUPER_SKILL_HOST_SKILLS=~/.agents/skills super-skill seed     # import, read-only
-SUPER_SKILL_HOST_SKILLS=~/.agents/skills super-skill status
+super-skill seed --host codex                 # import from ~/.agents/skills (read-only)
+super-skill materialize --host codex          # distribute active skills to Codex
+super-skill materialize <id> --host all       # push one skill to both hosts
 ```
 
-Since `~/.agents/skills` is super-skill's canonical source, Codex reads promoted
-skills there directly — zero-copy.
+`~/.agents/skills` is super-skill's canonical Codex source — Codex reads promoted
+skills there directly (zero-copy). Override the path with `SUPER_SKILL_CODEX_SKILLS`.
 
-## Not included
+## `agents/openai.yaml`
 
-- `agents/openai.yaml` (Codex host-extension metadata) is **optional** and its
-  exact schema is Codex-version-specific — add one per the current Codex docs if
-  you want custom UI metadata / invocation policy. This package intentionally
-  ships only the open-standard `SKILL.md`, which every Codex version reads.
-- Distributing super-skill's *produced* skills to Codex needs no extra step
-  (they live in `~/.agents/skills` already). A dedicated Codex Target Adapter in
-  the CLI (docs/01 FR-PUB-2) remains a P1 item.
+This package ships an optional `agents/openai.yaml` host extension (installed
+alongside `SKILL.md`) with Codex UI + invocation-policy hints (`interface`,
+`policy`). Only the open-standard `SKILL.md` is required; edit or remove the YAML
+per your current Codex version's docs.

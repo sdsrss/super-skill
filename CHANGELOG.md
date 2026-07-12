@@ -3,6 +3,26 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic versioning.
 
+## [0.10.0] - 2026-07-12
+
+### Added
+- **Codex Target Adapter** (docs/01 FR-PUB-2) — the CLI now distributes to more
+  than one host. `seed`, `approve`, `rollback`, and a new `materialize` command
+  take `--host claude | codex | all`; `codex` reads/writes `~/.agents/skills`
+  (override with `SUPER_SKILL_CODEX_SKILLS`), `all` targets both hosts. Defaults
+  stay `claude`, so existing behavior is unchanged.
+- **`materialize [skill_id] --host …`** — explicitly (re)distribute one skill, or
+  all active skills, to Claude Code and/or Codex.
+- **`codex/agents/openai.yaml`** — an optional Codex host-extension shipped with
+  the meta-skill (`interface` display name + `policy.allow_implicit_invocation`),
+  installed alongside `SKILL.md` by `codex/install.sh`. Schema per the Codex
+  build-skills docs; kept to the fields super-skill needs.
+
+### Notes
+- Self-learning (M1–M5) remains gated off by the H1 falsification GATE — not
+  built. The Codex adapter here is packaging/distribution (FR-PUB-2), not the
+  self-learning track.
+
 ## [0.9.2] - 2026-07-12
 
 ### Changed

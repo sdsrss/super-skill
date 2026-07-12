@@ -72,8 +72,9 @@ pipx install super-skill-cli
 codex/install.sh                     # drops the meta-skill into ~/.agents/skills
 ```
 
-Point the CLI at the Codex directory with `SUPER_SKILL_HOST_SKILLS=~/.agents/skills`.
-See [`codex/README.md`](codex/README.md).
+The CLI speaks Codex natively via `--host codex` — `super-skill seed --host codex`,
+`super-skill materialize --host codex` (or `--host all` for both hosts). See
+[`codex/README.md`](codex/README.md).
 
 ## Features
 
@@ -83,7 +84,8 @@ See [`codex/README.md`](codex/README.md).
 | `status` / `list` | Registry summary (skills, versions, events, candidates) and the skill list. |
 | `show <id>` | Frontmatter, version history, and content hashes for one skill. |
 | `explain <id>` | Provenance chain + audit trail + the exact rollback command. |
-| `rollback <id> [--to vN]` | Switch the active version and re-materialize it to the host. |
+| `rollback <id> [--to vN]` | Switch the active version and re-materialize it to the host(s). |
+| `materialize [id] --host claude\|codex\|all` | Distribute active skill(s) to Claude Code and/or Codex (the Codex Target Adapter). |
 | `doctor` / `doctor --fix` | Integrity check (hashes, active pointer, host sync); `--fix` restores git-recoverable versions and re-materializes drift, then re-verifies. |
 | `capture` | Append a host event to the redacted WAL — reads hook JSON on stdin, never fails the session. |
 | `mine` | Surface task families recurring across ≥3 distinct sessions; nudges you once enough new sessions accumulate. |
@@ -140,7 +142,8 @@ super-skill candidate approve <id>
 | Env var | Default | Purpose |
 |---|---|---|
 | `SUPER_SKILL_HOME` | `~/.super-skill` | Registry + control state (a git repo). |
-| `SUPER_SKILL_HOST_SKILLS` | `~/.claude/skills` | Skills directory to seed/materialize (set to `~/.agents/skills` for Codex). |
+| `SUPER_SKILL_HOST_SKILLS` | `~/.claude/skills` | Claude Code skills directory (`--host claude`). |
+| `SUPER_SKILL_CODEX_SKILLS` | `~/.agents/skills` | Codex skills directory (`--host codex`). |
 | `SUPER_SKILL_MINE_REMINDER` | `3` | Distinct unmined sessions before `status` nudges you to mine. |
 
 ## Scope
@@ -172,9 +175,10 @@ The plugin calls the `super-skill` CLI on your PATH. Install it from PyPI:
 `uv tool install super-skill-cli` (or `pipx install super-skill-cli`).
 
 **Does it support Codex?**
-Yes — the same CLI plus a `codex/` install package for `~/.agents/skills`. A Codex
-*Target Adapter inside the CLI* is a later item; distributing skills to Codex needs
-no extra step since they already live in `~/.agents/skills`.
+Yes — the same CLI plus a `codex/` install package for `~/.agents/skills`. The CLI
+has a Codex Target Adapter: `--host codex` (and `--host all`) on `seed`, `approve`,
+`rollback`, and `materialize` reads from and writes to Codex's `~/.agents/skills`.
+The Codex package also ships an optional `agents/openai.yaml` host extension.
 
 ## Develop
 

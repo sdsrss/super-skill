@@ -37,17 +37,52 @@ def _short(text: str, n: int = 60) -> str:
 
 
 @app.command()
-def seed() -> None:
+def seed(host: str = typer.Option("claude", "--host", help="source host: claude | codex")) -> None:
     """Import existing host skills into the registry (idempotent, read-only on host)."""
+    if host not in config.HOSTS:
+        typer.echo(f"unknown host {host!r} (expected: {', '.join(config.HOSTS)})", err=True)
+        raise typer.Exit(1)
     reg = _registry()
-    report = seed_from_host(reg, config.host_skills_dir())
+    src = config.host_skills_dir(host)
+    report = seed_from_host(reg, src)
     typer.echo(
         f"seed: {len(report.imported)} imported, {len(report.updated)} updated, "
         f"{len(report.unchanged)} unchanged, {len(report.skipped)} skipped "
-        f"(host={config.host_skills_dir()})"
+        f"(host={src})"
     )
     for name, reason in report.skipped:
         typer.echo(f"  skipped {name}: {reason}")
+
+
+@app.command()
+def materialize(
+    skill_id: str = typer.Argument("", help="skill to distribute; empty = all active skills"),
+    host: str = typer.Option("claude", "--host", help="target host: claude | codex | all"),
+) -> None:
+    """Distribute active skill(s) to a host skills dir — Claude Code and/or Codex (FR-PUB-2)."""
+    reg = _registry()
+    try:
+        hosts = config.resolve_hosts(host)
+    except ValueError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1) from e
+    ids = [skill_id] if skill_id else [
+        r.skill.skill_id for r in reg.list_skills() if r.skill.active_version
+    ]
+    if not ids:
+        typer.echo("no active skills to materialize")
+        return
+    failed = False
+    for sid in ids:
+        for h in hosts:
+            try:
+                dest = reg.materialize(sid, config.host_skills_dir(h))
+                typer.echo(f"{sid} -> {h}: {dest}")
+            except RegistryError as e:
+                typer.echo(f"{sid} -> {h}: {e}", err=True)
+                failed = True
+    if failed:
+        raise typer.Exit(1)
 
 
 @app.command()
@@ -189,9 +224,15 @@ def rollback(
     skill_id: str,
     to: str = typer.Option("", "--to", help="target version; default = previous"),
     reason: str = typer.Option("", "--reason"),
+    host: str = typer.Option("claude", "--host", help="re-materialize to: claude | codex | all"),
 ) -> None:
-    """Switch the active pointer to an older version and re-materialize to the host."""
+    """Switch the active pointer to an older version and re-materialize to the host(s)."""
     reg = _registry()
+    try:
+        hosts = config.resolve_hosts(host)
+    except ValueError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1) from e
     rec = reg.get(skill_id)
     if rec is None:
         typer.echo(f"unknown skill: {skill_id}", err=True)
@@ -205,11 +246,11 @@ def rollback(
         to = versions[idx - 1]
     try:
         reg.set_active(skill_id, to, op=OperationType.ROLLBACK, reason=reason or None)
-        dest = reg.materialize(skill_id, config.host_skills_dir())
+        dests = [reg.materialize(skill_id, config.host_skills_dir(h)) for h in hosts]
     except RegistryError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(1) from e
-    typer.echo(f"rolled back {skill_id} -> {to}; materialized {dest}")
+    typer.echo(f"rolled back {skill_id} -> {to}; materialized {', '.join(str(d) for d in dests)}")
 
 
 @app.command()
@@ -338,12 +379,21 @@ def candidate_show(candidate_id: str) -> None:
 def candidate_approve(
     candidate_id: str,
     reason: str = typer.Option("", "--reason"),
+    host: str = typer.Option("claude", "--host", help="materialize to: claude | codex | all"),
 ) -> None:
-    """Approve a candidate: promote to the registry and materialize to the host."""
+    """Approve a candidate: promote to the registry and materialize to the host(s)."""
     store = CandidateStore(config.state_root())
     reg = _registry()
     try:
-        sv = approve(store, reg, candidate_id, config.host_skills_dir(), reason=reason or None)
+        hosts = config.resolve_hosts(host)
+    except ValueError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1) from e
+    try:
+        sv = approve(store, reg, candidate_id, config.host_skills_dir(hosts[0]),
+                     reason=reason or None)
+        for extra in hosts[1:]:
+            reg.materialize(sv.skill_id, config.host_skills_dir(extra))
     except InstructionGateError as e:
         typer.echo(str(e), err=True)
         for f in e.findings:
@@ -359,9 +409,9 @@ def candidate_approve(
     except (CandidateError, RegistryError, SkillMdError) as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(1) from e
+    dests = ", ".join(str(config.host_skills_dir(h) / sv.skill_id) for h in hosts)
     typer.echo(
-        f"approved {candidate_id} -> {sv.skill_id}@{sv.version}; "
-        f"materialized to {config.host_skills_dir() / sv.skill_id}"
+        f"approved {candidate_id} -> {sv.skill_id}@{sv.version}; materialized to {dests}"
     )
 
 

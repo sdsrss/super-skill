@@ -52,6 +52,8 @@ def test_install_script_installs_into_sandbox_home():
         installed = Path(tmp) / ".agents/skills/super-skill/SKILL.md"
         assert installed.exists()
         assert "name: super-skill" in installed.read_text(encoding="utf-8")
+        # the host-extension travels with the skill
+        assert (Path(tmp) / ".agents/skills/super-skill/agents/openai.yaml").exists()
         # idempotent: a second run still succeeds
         r2 = subprocess.run(["bash", str(sh)], env=env, capture_output=True, text=True)
         assert r2.returncode == 0, r2.stderr

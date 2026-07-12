@@ -59,7 +59,8 @@ pipx install super-skill-cli
 codex/install.sh                     # 把元技能装进 ~/.agents/skills
 ```
 
-用 `SUPER_SKILL_HOST_SKILLS=~/.agents/skills` 让 CLI 指向 Codex 目录。详见
+CLI 原生支持 Codex——`--host codex`:`super-skill seed --host codex`、
+`super-skill materialize --host codex`(或 `--host all` 同时分发两个宿主)。详见
 [`codex/README.md`](codex/README.md)。
 
 ## 功能
@@ -71,6 +72,7 @@ codex/install.sh                     # 把元技能装进 ~/.agents/skills
 | `show <id>` | 某技能的 frontmatter、版本历史与内容哈希。 |
 | `explain <id>` | 来源链 + 审计记录 + 精确回滚命令。 |
 | `rollback <id> [--to vN]` | 切换活动版本并重新落地到宿主。 |
+| `materialize [id] --host claude\|codex\|all` | 把活动技能分发到 Claude Code 与/或 Codex(Codex Target Adapter)。 |
 | `doctor` / `doctor --fix` | 完整性校验(哈希、活动指针、宿主同步);`--fix` 从 git 恢复版本、重落地漂移,再复验。 |
 | `capture` | 把一条宿主事件追加进脱敏 WAL——从 stdin 读 hook JSON,绝不让会话失败。 |
 | `mine` | 挖掘跨 ≥3 个去重会话复现的任务家族;攒够新会话时提醒你挖掘。 |
@@ -124,7 +126,8 @@ super-skill candidate approve <id>
 | 环境变量 | 默认 | 用途 |
 |---|---|---|
 | `SUPER_SKILL_HOME` | `~/.super-skill` | 注册表 + 控制状态(git 仓库)。 |
-| `SUPER_SKILL_HOST_SKILLS` | `~/.claude/skills` | 要 seed/落地的技能目录(Codex 设为 `~/.agents/skills`)。 |
+| `SUPER_SKILL_HOST_SKILLS` | `~/.claude/skills` | Claude Code 技能目录(`--host claude`)。 |
+| `SUPER_SKILL_CODEX_SKILLS` | `~/.agents/skills` | Codex 技能目录(`--host codex`)。 |
 | `SUPER_SKILL_MINE_REMINDER` | `3` | `status` 提醒挖掘前的去重未挖掘会话数阈值。 |
 
 ## 范围
@@ -150,8 +153,9 @@ super-skill 刻意停在**包管理器**形态(里程碑 M0 + WS)。自学习闭
 `uv tool install super-skill-cli`(或 `pipx install super-skill-cli`)。
 
 **支持 Codex 吗?**
-支持——同一个 CLI 加一个面向 `~/.agents/skills` 的 `codex/` 安装包。CLI *内部的* Codex Target
-Adapter 是后续项;把技能分发给 Codex 无需额外步骤,因为它们本就在 `~/.agents/skills`。
+支持——同一个 CLI 加一个面向 `~/.agents/skills` 的 `codex/` 安装包。CLI 已内置 Codex Target
+Adapter:`seed`、`approve`、`rollback`、`materialize` 的 `--host codex`(及 `--host all`)会从
+Codex 的 `~/.agents/skills` 读取并写入。Codex 包还附带一个可选的 `agents/openai.yaml` 宿主扩展。
 
 ## 开发
 
