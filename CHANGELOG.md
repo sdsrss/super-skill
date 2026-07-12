@@ -3,6 +3,26 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic versioning.
 
+## [0.3.0] - 2026-07-12
+
+Closes out the walking skeleton: `candidate approve` now runs two hard gates
+before it writes anything, and real sessions can be wired into capture.
+
+### Added
+- **Instruction-layer adversarial gate** (docs/04 §2.4bis) — v1's only mandatory
+  security gate. Rule-scans a candidate's body + description for external-action
+  imperatives (`curl|bash`, network fetch, credential access, `ignore previous`
+  overrides, run-undeclared-script) and blocks `approve` before any write. v1
+  candidates are pure text the host Agent runs as trusted instructions, so a
+  poisoned imperative is the code×instruction seam single-tool scanners miss.
+- **Deterministic eval-lite hard gate** (docs/04 §1.6) — schema, zero
+  credential/PII leak, and the agentskills token budget, checked before promote.
+  The No Skill / Skill two-arm is labelled *Insufficient Evidence* at personal
+  scale (no corpus/harness) rather than faked.
+- **`hooks-config`** — prints the `settings.json` hooks block wiring the six host
+  events to `super-skill capture`, so real sessions accumulate into the WAL.
+  Print-only; you merge it into `~/.claude/settings.json` yourself.
+
 ## [0.2.0] - 2026-07-12
 
 Completes the walking-skeleton loop: mined opportunity families can now become
