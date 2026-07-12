@@ -264,6 +264,50 @@ def test_doctor_fix_cli(env):
     assert "needs manual fix" in r.output
 
 
+def test_mine_reminder_in_status(env):
+    import json
+
+    for sid in ("s1", "s2", "s3"):
+        runner.invoke(app, ["capture"], input=json.dumps({
+            "hook_event_name": "UserPromptSubmit", "session_id": sid,
+            "text": "dependency resolution failure in lockfile",
+        }))
+    # 3 distinct sessions never mined -> status nudges to run mine
+    r = runner.invoke(app, ["status"])
+    assert "unmined" in r.output and "super-skill mine" in r.output
+
+    # running mine resets the watermark; status goes quiet
+    runner.invoke(app, ["mine"])
+    r = runner.invoke(app, ["status"])
+    assert "unmined" not in r.output
+
+
+def test_mine_reports_distinct_count_below_threshold(env):
+    import json
+
+    for sid in ("s1", "s2"):
+        runner.invoke(app, ["capture"], input=json.dumps({
+            "hook_event_name": "UserPromptSubmit", "session_id": sid,
+            "text": "some unique unrepeated text",
+        }))
+    r = runner.invoke(app, ["mine"])  # 2 sessions < default min 3 -> no families
+    assert r.exit_code == 0
+    assert "2 distinct sessions" in r.output
+
+
+def test_candidate_draft_also_resets_reminder(env):
+    import json
+
+    for sid in ("s1", "s2", "s3"):
+        runner.invoke(app, ["capture"], input=json.dumps({
+            "hook_event_name": "UserPromptSubmit", "session_id": sid,
+            "text": "dependency resolution failure in lockfile",
+        }))
+    runner.invoke(app, ["candidate", "draft"])  # drafting consumes the mining
+    r = runner.invoke(app, ["status"])
+    assert "unmined" not in r.output
+
+
 def test_hooks_config_cli(env):
     import json as _json
 

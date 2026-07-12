@@ -9,7 +9,7 @@ import sys
 
 import typer
 
-from . import config
+from . import config, minestate
 from .candidate import CandidateError, CandidateStore, approve, draft_from_families, reject
 from .capture import EventLog
 from .doctor import check_registry, repair
@@ -79,13 +79,20 @@ def capture(
 @app.command()
 def mine(min_sessions: int = typer.Option(3, "--min-sessions")) -> None:
     """Surface recurring task families from captured events (FR-GEN-1 signal)."""
-    families = mine_families(EventLog().iter_events(), min_sessions=min_sessions)
+    log = EventLog()
+    families = mine_families(log.iter_events(), min_sessions=min_sessions)
+    distinct = log.distinct_sessions()
     if not families:
-        typer.echo(f"no families recurring across >={min_sessions} sessions yet")
-        return
-    typer.echo(f"{'sessions':>8}  {'events':>6}  family")
-    for fam in families:
-        typer.echo(f"{fam.session_count:>8}  {fam.event_count:>6}  {fam.label}")
+        typer.echo(
+            f"no families recurring across >={min_sessions} sessions yet "
+            f"({distinct} distinct sessions captured)"
+        )
+    else:
+        typer.echo(f"{'sessions':>8}  {'events':>6}  family")
+        for fam in families:
+            typer.echo(f"{fam.session_count:>8}  {fam.event_count:>6}  {fam.label}")
+    # Mining acknowledges the accumulated sessions: reset the reminder watermark.
+    minestate.record_mined(log.root, distinct)
 
 
 @app.command()
@@ -104,8 +111,13 @@ def status() -> None:
     typer.echo(f"git head   : {reg.head()}")
     typer.echo(f"skills     : {len(records)} ({active} active)")
     typer.echo(f"versions   : {versions}")
-    typer.echo(f"events     : {EventLog(reg.root).count()}")
+    log = EventLog(reg.root)
+    typer.echo(f"events     : {log.count()}")
     typer.echo(f"candidates : {len(cands)} ({breakdown})")
+    unmined = minestate.unmined(reg.root, log.distinct_sessions())
+    if unmined >= minestate.reminder_threshold():
+        typer.echo(f"reminder   : {unmined} distinct sessions unmined "
+                   f"— run `super-skill mine`")
 
 
 @app.command("list")
@@ -264,9 +276,12 @@ def hooks_config(
 @candidate_app.command("draft")
 def candidate_draft(min_sessions: int = typer.Option(3, "--min-sessions")) -> None:
     """Draft skill candidates from mined families (idempotent, pre-promotion)."""
-    families = mine_families(EventLog().iter_events(), min_sessions=min_sessions)
+    log = EventLog()
+    families = mine_families(log.iter_events(), min_sessions=min_sessions)
     store = CandidateStore(config.state_root())
     created = draft_from_families(store, families)
+    # Drafting acts on the mining, so it too clears the status reminder.
+    minestate.record_mined(log.root, log.distinct_sessions())
     if not created:
         typer.echo("no new candidates (nothing mined, or all already drafted)")
         return
