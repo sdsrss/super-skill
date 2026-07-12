@@ -71,3 +71,6 @@ class EventLog:
 
     def count(self) -> int:
         return sum(1 for _ in self.iter_events())
+
+    def distinct_sessions(self) -> int:
+        return len({ev.session_id for ev in self.iter_events()})
