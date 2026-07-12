@@ -3,6 +3,15 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic versioning.
 
+## [0.9.1] - 2026-07-12
+
+### Fixed
+- **`codex/install.sh` now ships executable** — it was committed with mode 100644,
+  so a fresh clone could only run it as `bash codex/install.sh`, not `./codex/install.sh`
+  as the README shows. Set the git exec bit (100755). The guard test now checks the
+  git-tracked mode (`git ls-files --stage`) instead of the working-tree mode, which
+  some filesystems report as executable regardless.
+
 ## [0.9.0] - 2026-07-12
 
 ### Added
