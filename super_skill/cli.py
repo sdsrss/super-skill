@@ -12,6 +12,9 @@ import typer
 from . import config
 from .candidate import CandidateError, CandidateStore, approve, draft_from_families, reject
 from .capture import EventLog
+from .evallite import EvalError, eval_lite
+from .gate import InstructionGateError, scan_skill_md
+from .hooks import hooks_settings
 from .mine import mine_families
 from .registry import Registry, RegistryError
 from .schemas import EventType, OperationType
@@ -185,6 +188,21 @@ def rollback(
     typer.echo(f"rolled back {skill_id} -> {to}; materialized {dest}")
 
 
+@app.command("hooks-config")
+def hooks_config(
+    command: str = typer.Option("super-skill capture", "--command", help="capture invocation"),
+) -> None:
+    """Print the settings.json hooks block that feeds real sessions to capture.
+
+    Prints only — merge it into ~/.claude/settings.json yourself (editing
+    user-global config is your call, not the tool's)."""
+    typer.echo(json.dumps(hooks_settings(command), indent=2))
+    typer.echo(
+        "\n# merge the above into ~/.claude/settings.json (or a project .claude/settings.json)",
+        err=True,
+    )
+
+
 @candidate_app.command("draft")
 def candidate_draft(min_sessions: int = typer.Option(3, "--min-sessions")) -> None:
     """Draft skill candidates from mined families (idempotent, pre-promotion)."""
@@ -226,8 +244,21 @@ def candidate_show(candidate_id: str) -> None:
     typer.echo(f"recurrence : {cand.session_count} sessions, {cand.event_count} events")
     if cand.version:
         typer.echo(f"promoted   : {cand.skill_id}@{cand.version}")
+    raw = store.skill_md(candidate_id)
+    findings = scan_skill_md(raw)
+    if findings:
+        typer.echo(f"gate       : {len(findings)} finding(s) — approve will be BLOCKED:")
+        for f in findings:
+            typer.echo(f"  ! {f.category} in {f.location}: {f.snippet}")
+    else:
+        typer.echo("gate       : clean (no injection patterns)")
+    report = eval_lite(raw)
+    ev = "pass" if report.passed else "FAIL"
+    typer.echo(f"eval-lite  : {ev} ({'; '.join(f'{c.name}={c.detail}' for c in report.checks)})")
+    if report.insufficient_evidence:
+        typer.echo("           : two-arm (No Skill/Skill) = Insufficient Evidence — human accept")
     typer.echo("--- SKILL.md ---")
-    typer.echo(store.skill_md(candidate_id))
+    typer.echo(raw)
 
 
 @candidate_app.command("approve")
@@ -240,6 +271,18 @@ def candidate_approve(
     reg = _registry()
     try:
         sv = approve(store, reg, candidate_id, config.host_skills_dir(), reason=reason or None)
+    except InstructionGateError as e:
+        typer.echo(str(e), err=True)
+        for f in e.findings:
+            typer.echo(f"  ! {f.category} in {f.location}: {f.snippet}", err=True)
+        typer.echo("edit the candidate's SKILL.md to remove the flagged text, then re-approve.",
+                   err=True)
+        raise typer.Exit(1) from e
+    except EvalError as e:
+        typer.echo(str(e), err=True)
+        for c in e.report.failures():
+            typer.echo(f"  ! {c.name}: {c.detail}", err=True)
+        raise typer.Exit(1) from e
     except (CandidateError, RegistryError, SkillMdError) as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(1) from e

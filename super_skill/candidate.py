@@ -17,6 +17,8 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field
 
 from . import config
+from .evallite import EvalError, eval_lite
+from .gate import InstructionGateError, scan_skill_md
 from .mine import OpportunityFamily
 from .registry import Registry
 from .schemas import (
@@ -164,6 +166,18 @@ def approve(
         raise CandidateError(f"candidate {cand_id!r} already approved")
 
     raw = store.skill_md(cand_id)
+    # Instruction-layer adversarial gate (docs/04 §2.4bis): v1's only mandatory
+    # security gate. Runs BEFORE any write — a blocked candidate never reaches
+    # the registry or the host. Captured content is untrusted; auto-approval
+    # never bypasses this (there is no auto-approval, but the invariant holds).
+    findings = scan_skill_md(raw)
+    if findings:
+        raise InstructionGateError(findings)
+    # Deterministic eval-lite hard gate (docs/04 §1.6): schema, zero secret leak,
+    # token budget. The No Skill/Skill two-arm is Insufficient Evidence at WS.
+    report = eval_lite(raw)
+    if not report.passed:
+        raise EvalError(report)
     skill_id = parse(raw).frontmatter.name  # frontmatter name is authoritative
     reg.init()
     prov = [

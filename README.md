@@ -33,5 +33,22 @@ uv run super-skill explain <id>          # provenance chain + audit + rollback h
 uv run super-skill rollback <id> [--to vN]   # switch active pointer, re-materialize to host
 ```
 
+Capture → mine → approve loop:
+
+```bash
+uv run super-skill hooks-config          # print the settings.json hooks block (merge it yourself)
+uv run super-skill capture               # append one host hook event (JSON on stdin); never fails
+uv run super-skill mine                  # surface task families recurring across ≥3 sessions
+uv run super-skill candidate draft       # scaffold candidates from mined families (TODO-stubs)
+uv run super-skill candidate show <id>   # draft + gate findings + eval-lite result
+uv run super-skill candidate approve <id># promote to registry + materialize to host
+```
+
+`approve` runs two hard gates before any write: the instruction-layer adversarial
+gate (rejects `curl|bash` / credential / `ignore previous` imperatives) and a
+deterministic eval-lite (schema, zero secret leak, token budget). The No Skill /
+Skill two-arm is labelled *Insufficient Evidence* at personal scale. To wire real
+sessions in, run `hooks-config` and merge its output into `~/.claude/settings.json`.
+
 State lives in `~/.super-skill/` (a git repo — audit and rollback are git). Override
 with `SUPER_SKILL_HOME`; override the host skills dir with `SUPER_SKILL_HOST_SKILLS`.
