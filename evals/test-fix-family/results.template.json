@@ -1,0 +1,17 @@
+{
+  "_comment": "Fill in after running both arms. Each list = 3 reps for that case (true=verifier passed). Hours = your logged human effort.",
+  "mined": {
+    "case1": [false, false, false],
+    "case2": [false, false, false],
+    "case3": [false, false, false]
+  },
+  "handwritten": {
+    "case1": [false, false, false],
+    "case2": [false, false, false],
+    "case3": [false, false, false]
+  },
+  "hours": {
+    "mined_review_edit": 0.0,
+    "handwritten_author_debug": 0.0
+  }
+}
