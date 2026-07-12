@@ -1,0 +1,20 @@
+{
+  "name": "super-skill",
+  "owner": {
+    "name": "sdsrss",
+    "email": "sammuaicode@gmail.com"
+  },
+  "metadata": {
+    "description": "super-skill: personal Agent-Skill package manager (versioned registry, rollback, mining).",
+    "version": "0.8.0"
+  },
+  "plugins": [
+    {
+      "name": "super-skill",
+      "source": "./",
+      "description": "Git-backed versioned registry for your Claude Code skills: seed import, explain/provenance, one-command rollback, integrity doctor, and opportunity mining. Wraps the `super-skill` CLI (pip/uv installable as super-skill-cli).",
+      "version": "0.8.0",
+      "category": "development"
+    }
+  ]
+}

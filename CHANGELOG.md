@@ -3,6 +3,30 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic versioning.
 
+## [0.8.0] - 2026-07-12
+
+### Added
+- **Claude Code plugin** — install via `/plugin marketplace add sdsrss/super-skill`
+  then `/plugin install super-skill`. Ships slash commands (`/super-skill:status`,
+  `:mine`, `:doctor`, `:candidates`, `:seed`), a `super-skill` meta-skill Claude
+  invokes when you ask to version/explain/roll back a skill, and `hooks/hooks.json`
+  wiring the six host events to `super-skill capture`. If your Claude Code build
+  doesn't auto-load plugin hooks, `super-skill hooks-config` remains the reliable
+  manual path.
+- **PyPI-installable CLI** — packaging metadata (MIT license, classifiers, URLs)
+  so the CLI installs with `uv tool install super-skill-cli` / `pipx install
+  super-skill-cli`. The command stays `super-skill`.
+
+### Changed
+- **Distribution renamed to `super-skill-cli`** on PyPI — the bare `super-skill`
+  name is held by an unrelated package. No action needed for anyone: prior
+  releases were git tags only, never published to a package registry. The
+  installed command name is unchanged (`super-skill`).
+
+### Notes
+- Codex plugin packaging stays a deferred P1 (per docs/01 FR-PUB-2). PyPI publish
+  is a separate credentialed step, not performed by this release.
+
 ## [0.7.0] - 2026-07-12
 
 ### Added
