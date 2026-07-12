@@ -14,9 +14,10 @@ gate (§2.4bis) is a separate hard gate run first in ``candidate.approve``.
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass, field
+
+import yaml
 
 from .redact import redact_text
 from .skillmd import SkillMdError, parse
@@ -75,8 +76,11 @@ def eval_lite(raw: str) -> EvalReport:
 
     # 2. zero credential / PII leak in the instruction text (凭据与 PII 泄漏 = 0).
     # Scan the FULL frontmatter (extra="allow" ships every field to the host, M6),
-    # not just description + body.
-    fm = json.dumps(parsed.frontmatter.model_dump(), default=str, ensure_ascii=False)
+    # not just description + body. YAML (not JSON) keeps ``keyword: value``
+    # adjacency so a secret in a keyword-named field is caught (v0.11.1 #4).
+    fm = yaml.safe_dump(
+        parsed.frontmatter.model_dump(), default_flow_style=False, allow_unicode=True
+    )
     text = f"{fm}\n{parsed.body}"
     _, counts = redact_text(text)
     leaks = {k: c for k, c in counts.items() if k != "home_path"}

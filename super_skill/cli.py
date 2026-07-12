@@ -97,7 +97,9 @@ def capture(
     try:
         raw = sys.stdin.read()
         data = json.loads(raw) if raw.strip() else {}
-    except (json.JSONDecodeError, OSError):
+    except Exception:
+        # NFR-3: never fail the session. Covers JSONDecodeError, OSError, and
+        # RecursionError (deeply-nested JSON — a RuntimeError, not JSONDecodeError).
         raise typer.Exit(0) from None
     # NFR-3: the hook must NEVER fail the host session. Everything past here —
     # non-dict JSON (data.get would raise), an unknown event type, or any WAL

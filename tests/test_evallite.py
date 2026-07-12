@@ -40,6 +40,16 @@ def test_secret_in_extra_frontmatter_field_fails_gate():
     assert any(c.name == "no_secret_leak" and not c.passed for c in report.checks)
 
 
+def test_keyword_named_frontmatter_field_secret_fails_gate():
+    """v0.11.1 #4: a `keyword: value` secret in a custom frontmatter field must
+    fail the leak gate — JSON-serializing split the keyword from the value with a
+    quote and let it through."""
+    raw = "---\nname: s\ndescription: clean\ntoken: abcdef1234567890secretvalue\n---\nbody\n"
+    report = eval_lite(raw)
+    assert not report.passed
+    assert any(c.name == "no_secret_leak" and not c.passed for c in report.checks)
+
+
 def test_over_token_budget_fails_gate():
     huge = "word " * 6000  # well over the agentskills <5000-token body limit
     report = eval_lite(_md(huge))

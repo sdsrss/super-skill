@@ -81,6 +81,25 @@ def test_underscore_env_var_secrets_redacted():
     assert counts == {}
 
 
+def test_assigned_secret_no_catastrophic_backtracking():
+    """v0.11.1 #1: the broadened assigned_secret rule must not ReDoS on
+    underscore-heavy input (it runs on every captured event before disk)."""
+    import time
+
+    payload = "api_key_" * 800  # 6.4KB snake_case blob — ~21s on the ReDoS version
+    start = time.perf_counter()
+    redact_text(payload)
+    elapsed_ms = (time.perf_counter() - start) * 1000
+    assert elapsed_ms < 2000, f"assigned_secret backtracking: {elapsed_ms:.0f}ms on 6.4KB"
+
+
+def test_openai_project_key_fully_redacted():
+    """v0.11.1 #3: sk-proj-/sk-svcacct- key bodies contain _ and -, so the tail
+    after the first such char must not survive."""
+    red, _ = redact_text("key sk-proj-abcdefghijklmnopqrstuvwx_MoreTail-secret99 end")
+    assert "MoreTail" not in red and "secret99" not in red
+
+
 def test_modern_token_formats_redacted():
     """P0-2 / H2: current provider key formats must be matched."""
     cases = {

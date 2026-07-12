@@ -62,7 +62,9 @@ class EventLog:
         data = (event.model_dump_json() + "\n").encode("utf-8")
         fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
         try:
-            os.write(fd, data)
+            # Loop on short writes so a very large line isn't silently truncated.
+            while data:
+                data = data[os.write(fd, data):]
         finally:
             os.close(fd)
         return event

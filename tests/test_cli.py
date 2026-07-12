@@ -117,6 +117,14 @@ def test_capture_non_dict_json_never_fails(env):
         assert r.exit_code == 0, f"{payload!r} -> exit {r.exit_code}"
 
 
+def test_capture_deeply_nested_json_never_fails(env):
+    """v0.11.1 #2: json.loads raises RecursionError (a RuntimeError, not
+    JSONDecodeError) on very deep nesting — capture must still exit 0 (NFR-3)."""
+    payload = "[" * 20000 + "]" * 20000
+    r = runner.invoke(app, ["capture"], input=payload)
+    assert r.exit_code == 0
+
+
 def test_capture_survives_append_failure(env, monkeypatch):
     """P1-1 / M5: any write-path error inside append must still exit 0 (NFR-3),
     not surface a traceback to the host session."""
