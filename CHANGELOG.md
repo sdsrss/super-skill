@@ -3,6 +3,37 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic versioning.
 
+## [0.11.1] - 2026-07-12
+
+Follow-up patch from a code review of 0.11.0. Fixes a **Critical ReDoS regression
+the 0.11.0 redaction hardening introduced** plus four gaps. Backward-compatible;
+upgrade recommended over 0.11.0 (`pip install -U super-skill-cli`).
+
+### Security
+- **Fix ReDoS in the redaction `assigned_secret` rule** (regression in 0.11.0) —
+  the broadened rule used unbounded `[A-Za-z0-9_]*` runs, so underscore-heavy
+  input (snake_case blobs, env dumps) backtracked catastrophically: a ~6 KB
+  payload took ~21 s. Since redaction runs on every captured event, a normal
+  hook payload could hang `super-skill capture` (worse than the crash 0.11.0 was
+  hardening). Runs are now bounded (`{0,64}`); the same payload processes in
+  ~18 ms and secrets still redact.
+- **`sk-proj-`/`sk-svcacct-` OpenAI keys are now fully redacted** — the body may
+  contain `_`/`-`, and the previous rule stopped at the first such char, leaking
+  the tail.
+- **A secret in a keyword-named frontmatter field is now caught** — the gate and
+  eval-lite serialized frontmatter with JSON, which quoted the key (`"token":`)
+  and broke the `keyword: value` secret pattern; they now use YAML, preserving
+  adjacency.
+- **The gate folds uppercase homoglyphs** — the confusables map was lowercase
+  only, so `СURL … | bash` (uppercase Cyrillic) slipped through; normalization
+  now casefolds first.
+
+### Fixed
+- **`capture` survives deeply-nested JSON** — `json.loads` raises `RecursionError`
+  (a `RuntimeError`, not `JSONDecodeError`) on very deep input; the parse guard
+  now exits 0 on any error (NFR-3).
+- The WAL append loops on short writes so a very large line can't be truncated.
+
 ## [0.11.0] - 2026-07-12
 
 Security & reliability hardening from a full production-readiness audit. All fixes

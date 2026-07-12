@@ -25,7 +25,9 @@ _PATTERNS: list[tuple[str, re.Pattern[str], int]] = [
     ), 0),
     ("anthropic_key", re.compile(r"sk-ant-[A-Za-z0-9_-]{16,}"), 0),
     # OpenAI legacy (sk-…) + prefixed project/service keys (sk-proj-…, sk-svcacct-…).
-    ("openai_key", re.compile(r"sk-(?:[a-z]+-)?[A-Za-z0-9]{20,}"), 0),
+    # The 20+ alnum CORE keeps prose (short hyphenated words) from matching; the
+    # trailing _/- -joined segments capture project-key bodies fully (no tail leak).
+    ("openai_key", re.compile(r"sk-(?:[a-z]+-)?[A-Za-z0-9]{20,}(?:[_-][A-Za-z0-9]+)*"), 0),
     ("stripe_key", re.compile(r"sk_(?:live|test)_[A-Za-z0-9]{16,}"), 0),
     ("github_pat", re.compile(r"github_pat_[A-Za-z0-9_]{20,}"), 0),
     ("github_token", re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}"), 0),
@@ -36,12 +38,14 @@ _PATTERNS: list[tuple[str, re.Pattern[str], int]] = [
     # Match a full identifier token that CONTAINS a sensitive word, up to the
     # assignment. A ``\b`` left-anchor missed ``DB_PASSWORD`` (``_`` is a word
     # char) and a bare keyword missed ``SECRET_KEY`` (the ``_KEY`` suffix broke
-    # ``[:=]`` adjacency) — H1. The lookbehind + surrounding ``[A-Za-z0-9_]*``
-    # admit the keyword anywhere inside an env-var-shaped name.
+    # ``[:=]`` adjacency) — H1. The lookbehind + surrounding identifier runs admit
+    # the keyword anywhere inside an env-var-shaped name. The runs are BOUNDED
+    # ({0,64}, not *) — an unbounded run over an underscore-heavy blob backtracks
+    # catastrophically (ReDoS on the capture hot path); env-var names are short.
     ("assigned_secret", re.compile(
-        r"(?i)(?<![A-Za-z0-9])[A-Za-z0-9_]*"
+        r"(?i)(?<![A-Za-z0-9])[A-Za-z0-9_]{0,64}"
         r"(?:api[_-]?key|access[_-]?key|secret|password|passwd|pwd|token)"
-        r"[A-Za-z0-9_]*\s*[:=]\s*['\"]?([^\s'\"]{6,})",
+        r"[A-Za-z0-9_]{0,64}\s*[:=]\s*['\"]?([^\s'\"]{6,})",
     ), 1),
     ("email", re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"), 0),
 ]

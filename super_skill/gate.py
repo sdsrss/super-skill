@@ -16,10 +16,11 @@ land at M1 — v1 candidates carry no scripts, so there is nothing to cross-chec
 
 from __future__ import annotations
 
-import json
 import re
 import unicodedata
 from dataclasses import dataclass
+
+import yaml
 
 from .skillmd import parse
 
@@ -29,16 +30,18 @@ from .skillmd import parse
 # out of scope until the M1 LLM-judge layer.
 _ZERO_WIDTH = dict.fromkeys(map(ord, "​‌‍⁠﻿"), None)
 _CONFUSABLES = str.maketrans({
-    "а": "a", "ｂ": "b", "с": "c", "ԁ": "d", "е": "e", "ɡ": "g", "һ": "h", "і": "i",
-    "ј": "j", "ⅼ": "l", "ո": "n", "о": "o", "р": "p", "ѕ": "s", "т": "t", "υ": "u",
+    "а": "a", "с": "c", "ԁ": "d", "е": "e", "ɡ": "g", "һ": "h", "і": "i",
+    "ј": "j", "ո": "n", "о": "o", "р": "p", "ѕ": "s", "т": "t", "υ": "u",
     "ν": "v", "х": "x", "у": "y", "α": "a", "ε": "e", "ο": "o", "ρ": "p", "κ": "k",
 })
 
 
 def _normalize(text: str) -> str:
-    """Fold cheap obfuscations before pattern-matching."""
+    """Fold cheap obfuscations before pattern-matching. casefold() runs before the
+    confusables map so UPPERCASE homoglyphs (e.g. Cyrillic ``С``) fold too."""
     text = unicodedata.normalize("NFKC", text)
     text = text.translate(_ZERO_WIDTH)
+    text = text.casefold()
     return text.translate(_CONFUSABLES)
 
 # (category, pattern). Case-insensitive. Ordered most-severe first.
@@ -126,5 +129,9 @@ def scan_skill_md(raw: str) -> list[Finding]:
     # name is NAME_RE-constrained (safe); description already scanned above.
     extra = {k: v for k, v in fm.items() if k not in ("name", "description") and v is not None}
     if extra:
-        findings += scan_text(json.dumps(extra, default=str, ensure_ascii=False), "frontmatter")
+        # YAML (not JSON) keeps ``keyword: value`` adjacency — JSON quotes the key
+        # (``"token":``), which breaks the credential/secret patterns that expect
+        # the keyword immediately before ``:`` (v0.11.1 #4).
+        dumped = yaml.safe_dump(extra, default_flow_style=False, allow_unicode=True)
+        findings += scan_text(dumped, "frontmatter")
     return findings + scan_text(parsed.body, "body")
