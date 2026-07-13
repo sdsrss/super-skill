@@ -3,6 +3,58 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic versioning.
 
+## [0.13.0] - 2026-07-13
+
+A hardening release implementing the full v0.12.1 comprehensive-audit roadmap
+(18 items across strategy calibration, privacy, load-bearing guardrails,
+resilience, and consistency) plus a code-review round. All test-driven:
+186 → 223 passing tests; `ruff` and `mypy --strict` clean. Backward-compatible.
+
+### Added
+- `super-skill prune [--days N] [--apply]` — deletes captured event days past the
+  FR-CAP-6 TTL (default 14 days, `SUPER_SKILL_EVENT_TTL`; dry-run by default,
+  `--apply` to delete). Delivers the retention bound that was previously only a
+  docstring claim, so a long-running capture WAL no longer grows unbounded.
+- Multi-host consistency tracking. A skill now records which hosts it was
+  distributed to (`materialized_hosts`); `rollback` re-materializes to *every*
+  tracked host — so a default `rollback` also re-syncs Codex, not just Claude —
+  and `doctor`/`doctor --fix` verify and repair per-host drift instead of only
+  looking at the Claude directory.
+- Forward-compatible on-disk state. A `schema_version` stamp is written into
+  `meta.json`, `candidate.json`, and each WAL line; persisted models read with
+  `extra="ignore"` so an older CLI tolerates (drops) fields a newer super-skill
+  added rather than failing with "corrupt". Truncated/type-invalid state still
+  surfaces as a clean error.
+
+### Fixed
+- Chinese blind spot in the mining/eval instruments. The opportunity miner now
+  emits CJK bigrams (previously non-ASCII text was replaced with spaces, so a
+  Chinese session mined to almost nothing) and the eval-lite token budget counts
+  CJK characters (~1.5 chars/token) instead of estimating a 3000-character
+  Chinese body as ~1 token.
+- The instruction-layer approval gate now covers Chinese prompt-injection/exfil
+  phrasing, `base64 -d | sh` decode-pipes, and env-collect-and-transmit patterns.
+  Its docstring and the READMEs no longer imply the rule scan is a safety
+  guarantee — it is a backstop, and approving still requires reading the full
+  SKILL.md.
+- Concurrent registry writes no longer lose updates. A re-entrant `fcntl` advisory
+  lock guards the read-modify-write + git-commit critical section (also removing
+  a `git add` / `index.lock` race). Atomic writes are chmod `0o600`.
+- A candidate still carrying its unedited TODO / "EDIT before approving" scaffold
+  is blocked at approve, so a hollow skill can't be promoted and start routing.
+- A dangling active-version pointer no longer crashes `explain` / `rollback`
+  (they now point you at `doctor`), and `rollback`'s default target is the DAG
+  parent rather than the version dict's insertion-order predecessor.
+- Redaction adds JWT and URL basic-auth (`user:pass@host`) patterns and a 256 KB
+  per-leaf payload cap (redact first, then truncate).
+- A failed `git commit` surfaces as `RegistryError` (caught by the CLI) instead
+  of a raw `CalledProcessError` traceback.
+
+### Security
+- User-supplied skill and candidate ids are validated against `NAME_RE` before
+  reaching a filesystem path (no `../` traversal), and an unknown `--host` now
+  raises instead of silently defaulting to the Claude skills directory.
+
 ## [0.12.1] - 2026-07-13
 
 Mine-backlog reminder UX fix. Backward-compatible.
