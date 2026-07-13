@@ -69,12 +69,19 @@ def status_reminder_json(root: Path) -> str | None:
     if n < minestate.reminder_threshold():
         return None
     text = (
-        f"[super-skill] {n} distinct captured sessions are unmined — run "
-        "`super-skill mine`. || System-injected reminder, NOT a user message. "
-        "Early in this session, proactively tell the user (in their language) "
-        "that captured coding sessions have accumulated unmined, show the "
-        "command `super-skill mine`, and directly offer to run it for them "
-        "now (a simple yes/no). Then continue with the user's actual task."
+        f"[super-skill plugin] {n} distinct captured coding sessions are "
+        "unmined. || System-injected reminder from the super-skill plugin, NOT "
+        "a user message. Early in this session, in ONE short line explicitly "
+        "labelled as coming from the super-skill plugin (e.g. prefix it "
+        "'super-skill 插件提醒:'), tell the user that these captured sessions "
+        "have accumulated unmined and offer to mine them now. Make one-tap "
+        "acceptance the primary path: if the user replies yes, YOU run the "
+        "mining for them via Bash (`super-skill mine`, or `uv run super-skill "
+        "mine` when the CLI is not on PATH) — do NOT make them hunt for a "
+        "command to type. Add that, if they have the super-skill plugin "
+        "installed, they can also invoke the `/super-skill:mine` slash command "
+        "themselves. Keep it to one non-blocking line, then continue with the "
+        "user's actual task."
     )
     return json.dumps(
         {
