@@ -154,8 +154,14 @@ def test_status_reminder_emits_envelope_on_backlog(env):
     assert envelope["suppressOutput"] is True
     out = envelope["hookSpecificOutput"]
     assert out["hookEventName"] == "SessionStart"
-    assert "super-skill mine" in out["additionalContext"]
-    assert "NOT a user message" in out["additionalContext"]
+    ctx = out["additionalContext"]
+    assert "super-skill mine" in ctx  # runnable accept path (Bash)
+    assert "NOT a user message" in ctx
+    # UX (D#70): attributed to the plugin, and points at the one-tap accept +
+    # the slash command — not a bare CLI string the user can't run in-chat.
+    assert "super-skill plugin" in ctx
+    assert "/super-skill:mine" in ctx
+    assert "replies yes" in ctx
 
     runner.invoke(app, ["mine"])  # acknowledging clears the reminder
     r = runner.invoke(app, ["status-reminder"])
