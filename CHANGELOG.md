@@ -3,6 +3,35 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic versioning.
 
+## [0.11.2] - 2026-07-12
+
+Mining signal-to-noise fix. Backward-compatible.
+
+### Fixed
+- **`mine` no longer surfaces harness notification boilerplate as task families.**
+  Task-notification envelopes ride inside payload VALUES (e.g. a Stop event's
+  `last_assistant_message`), invisible to the existing envelope-KEY skip:
+  template prose ("fires each time … may notify more than once"), tool-use ids,
+  output-file paths and usage metrics mined into ~24 junk families of the top 50
+  on real data. Metadata elements (`summary`/`note`/`task-id`/`tool-use-id`/
+  `output-file`/`usage`) are now stripped wholesale (bounded quantifiers, no
+  backtracking risk); other markup loses only its tags, so `<result>` content
+  still mines. Live re-mine after the fix: 0 harness-noise families.
+- **`super-skill mine | head` no longer silently loses the watermark.** The
+  mined-sessions watermark was recorded after the family listing printed, so
+  SIGPIPE from a closed downstream pipe killed the process first and every
+  session stayed "unmined" (`status` kept nagging). The watermark is now
+  recorded before printing.
+
+### Added (repo-only, not shipped in the wheel)
+- `evals/release-family/`: B′ pilot harness — 5 sealed release-family cases +
+  2 negative controls with deterministic tier-1 verifiers, directory-shaped
+  grader, 4-criteria verdict tooling (`report.py`), and the raw results of the
+  51-run blind experiment (design docs/10, report docs/11; verdict: FAIL on
+  the investment criterion — pilot closed as designed).
+
+Tests 164 → 181; `ruff check` / `mypy --strict` clean.
+
 ## [0.11.1] - 2026-07-12
 
 Follow-up patch from a code review of 0.11.0. Fixes a **Critical ReDoS regression
