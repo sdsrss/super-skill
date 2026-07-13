@@ -33,13 +33,36 @@ _ENVELOPE_KEYS = frozenset(
 # placeholder so "redacted" and the kind name don't become mined tokens.
 _REDACTION_RE = re.compile(r"\[REDACTED:[^\]]*\]")
 
+# Harness task-notification envelopes ride inside payload VALUES (e.g. a Stop
+# event's last_assistant_message), so the envelope-KEY skip above can't see
+# them. Their template prose dominated real mining (2026-07-12: 8 sessions /
+# 31 events of "fires each time ... may notify more than once" bigrams).
+# Strip metadata ELEMENTS wholesale (tag + inner text — ids, paths, template
+# prose); other tags lose only their markup so <result> content still mines.
+# Quantifiers are bounded (ReDoS guard): unmatched oversize elements degrade
+# to tag-stripping, never to backtracking.
+_HARNESS_ELEMENT_RE = re.compile(
+    r"<(summary|note|task-id|tool-use-id|output-file|usage)\b[^>]{0,256}>"
+    r".{0,4000}?</\1\s{0,8}>",
+    re.S,
+)
+_TAG_RE = re.compile(r"</?[a-zA-Z][a-zA-Z0-9_-]{0,64}[^>]{0,256}>")
+
+# Metric names that also appear as bare key=value text outside any tag.
+_HARNESS_STOP = frozenset(
+    "task-notification task-id tool-use-id output-file"
+    " subagent_tokens tool_uses duration_ms".split()
+)
+
 
 def _tokens(text: str) -> list[str]:
+    text = _HARNESS_ELEMENT_RE.sub(" ", text)
+    text = _TAG_RE.sub(" ", text)
     text = _REDACTION_RE.sub(" ", text)
     out = []
     for t in re.sub(r"[^a-z0-9/_.\- ]", " ", text.lower()).split():
         t = t.strip("-./_")
-        if len(t) >= 3 and not t.isdigit() and t not in _STOP:
+        if len(t) >= 3 and not t.isdigit() and t not in _STOP and t not in _HARNESS_STOP:
             out.append(t)
     return out
 

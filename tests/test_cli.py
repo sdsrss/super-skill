@@ -101,6 +101,31 @@ def test_capture_from_stdin_and_mine(env):
     assert "lockfile" in r.output or "dependency" in r.output or "resolution" in r.output
 
 
+def test_mine_records_watermark_even_when_output_pipe_breaks(env, monkeypatch):
+    """`super-skill mine | head` used to die of SIGPIPE mid-listing BEFORE the
+    watermark write, silently leaving every session unmined. Mining must
+    acknowledge the sessions before it starts printing."""
+    import json
+
+    for sid in ("s1", "s2", "s3"):
+        payload = json.dumps({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": sid,
+            "text": "dependency resolution failure in lockfile",
+        })
+        runner.invoke(app, ["capture"], input=payload)
+
+    def broken_echo(*args, **kwargs):
+        raise BrokenPipeError
+
+    monkeypatch.setattr("super_skill.cli.typer.echo", broken_echo)
+    runner.invoke(app, ["mine"])  # downstream pipe closed mid-listing
+
+    from super_skill import config, minestate
+
+    assert minestate.mined_sessions(config.state_root()) == {"s1", "s2", "s3"}
+
+
 def test_capture_malformed_input_never_fails(env):
     r = runner.invoke(app, ["capture"], input="not json at all")
     assert r.exit_code == 0  # NFR-3: hook must never fail the session

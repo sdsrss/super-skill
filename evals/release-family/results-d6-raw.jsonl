@@ -1,0 +1,51 @@
+{"run": "none/case5_r1", "grade": "PASS"}
+{"run": "none/case2_r1", "grade": "PASS"}
+{"run": "none/case3_r1", "grade": "PASS"}
+{"run": "none/case1_r1", "grade": "PASS"}
+{"run": "none/case5_r2", "grade": "PASS"}
+{"run": "none/case2_r2", "grade": "PASS"}
+{"run": "none/case3_r2", "grade": "PASS"}
+{"run": "none/case1_r2", "grade": "PASS"}
+{"run": "none/case5_r3", "grade": "PASS"}
+{"run": "none/case4_r1", "grade": "PASS"}
+{"run": "none/case2_r3", "grade": "PASS"}
+{"run": "none/case3_r3", "grade": "PASS"}
+{"run": "none/case4_r2", "grade": "PASS"}
+{"run": "none/case4_r3", "grade": "PASS"}
+{"run": "none/case1_r3", "grade": "PASS"}
+{"run": "hand/case5_r1", "grade": "PASS", "self_report": "Skills invoked: none"}
+{"run": "hand/case3_r1", "grade": "PASS", "self_report": "Skills invoked: none"}
+{"run": "hand/case2_r1", "grade": "PASS", "self_report": "Skills invoked: none"}
+{"run": "hand/case1_r1", "grade": "PASS", "self_report": "Skills invoked: none"}
+{"run": "hand/case5_r2", "grade": "PASS", "self_report": "Skills invoked: none"}
+{"run": "hand/case2_r2", "grade": "PASS", "self_report": "Skills invoked: none"}
+{"run": "hand/case1_r2", "grade": "PASS", "self_report": "Skills invoked: none"}
+{"run": "hand/case3_r2", "grade": "PASS", "self_report": "Skills invoked: none"}
+{"run": "hand/case4_r1", "grade": "PASS", "self_report": "Skills invoked: none"}
+{"run": "hand/case5_r3", "grade": "PASS", "self_report": "Skills invoked: none"}
+{"run": "hand/case3_r3", "grade": "PASS", "self_report": "Skills invoked: none"}
+{"run": "hand/case2_r3", "grade": "PASS", "self_report": "Skills invoked: none"}
+{"run": "hand/case1_r3", "grade": "PASS", "self_report": "Skills invoked: none"}
+{"run": "hand/case4_r2", "grade": "PASS", "self_report": "Skills invoked: none"}
+{"run": "hand/case4_r3", "grade": "PASS", "self_report": "Skills invoked: cli-exit-code-must-reflect-remaining"}
+{"run": "hybrid/case1_r1", "grade": "PASS", "self_report": "Skills invoked: none"}
+{"run": "hybrid/case1_r2", "grade": "PASS", "self_report": "Skills invoked: none"}
+{"run": "hybrid/case1_r3", "grade": "PASS", "self_report": "Skills invoked: none"}
+{"run": "hybrid/case2_r1", "grade": "PASS", "self_report": "Skills invoked: none"}
+{"run": "hybrid/case2_r2", "grade": "PASS", "self_report": "Skills invoked: none"}
+{"run": "hybrid/case2_r3", "grade": "PASS", "self_report": "Skills invoked: none"}
+{"run": "hybrid/case3_r1", "grade": "PASS", "self_report": "Skills invoked: none"}
+{"run": "hybrid/case3_r2", "grade": "PASS", "self_report": "Skills invoked: none"}
+{"run": "hybrid/case3_r3", "grade": "PASS", "self_report": "Skills invoked: none"}
+{"run": "hybrid/case4_r1", "grade": "PASS", "self_report": "Skills invoked: cli-exit-code-must-reflect-remaining"}
+{"run": "hybrid/case4_r2", "grade": "PASS", "self_report": "Skills invoked: cli-exit-code-must-reflect-remaining"}
+{"run": "hybrid/case5_r1", "grade": "PASS", "self_report": "Skills invoked: none"}
+{"run": "hybrid/case5_r2", "grade": "PASS", "self_report": "Skills invoked: none"}
+{"run": "hybrid/case5_r3", "grade": "PASS", "self_report": "Skills invoked: none"}
+{"run": "hybrid/n1_r1", "grade": "PASS", "self_report": "Skills invoked: none"}
+{"run": "hybrid/n1_r2", "grade": "PASS", "self_report": "Skills invoked: none"}
+{"run": "hybrid/n1_r3", "grade": "PASS", "self_report": "Skills invoked: none"}
+{"run": "hybrid/n2_r1", "grade": "PASS", "self_report": "Skills invoked: none"}
+{"run": "hybrid/n2_r2", "grade": "PASS", "self_report": "Skills invoked: none"}
+{"run": "hybrid/n2_r3", "grade": "PASS", "self_report": "Skills invoked: none"}
+{"run": "hybrid/case4_r3", "grade": "PASS", "self_report": "Skills invoked: cli-exit-code-must-reflect-remaining"}
