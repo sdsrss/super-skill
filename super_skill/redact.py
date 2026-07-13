@@ -35,6 +35,13 @@ _PATTERNS: list[tuple[str, re.Pattern[str], int]] = [
     ("gcp_key", re.compile(r"AIza[0-9A-Za-z_-]{35}"), 0),
     ("slack_token", re.compile(r"xox[baprs]-[A-Za-z0-9-]{10,}"), 0),
     ("bearer_token", re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/-]{16,}=*"), 0),
+    # Bare JWT (no Bearer prefix): three dot-joined base64url segments (P2-4).
+    # Linear runs, no nested quantifiers — no ReDoS.
+    ("jwt", re.compile(
+        r"\beyJ[A-Za-z0-9_-]{6,}\.eyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}"
+    ), 0),
+    # URL basic-auth creds ``://user:pass@`` — redact the creds, keep the host.
+    ("basic_auth", re.compile(r"://([^/@\s:]{1,64}:[^/@\s]{1,128})@"), 1),
     # Match a full identifier token that CONTAINS a sensitive word, up to the
     # assignment. A ``\b`` left-anchor missed ``DB_PASSWORD`` (``_`` is a word
     # char) and a bare keyword missed ``SECRET_KEY`` (the ``_KEY`` suffix broke
@@ -84,6 +91,12 @@ def redact_text(text: str) -> tuple[str, dict[str, int]]:
 # would blow past capture's guard). Well under CPython's ~1000-frame limit.
 _MAX_DEPTH = 60
 
+# Per-leaf length cap: a 10MB tool-output leaf would bloat the WAL line and run
+# every redaction regex over megabytes on the hook hot path (P2-8). Truncate AFTER
+# redaction so the cut can't split a secret mid-token.
+_MAX_LEAF_LEN = 256 * 1024
+_TRUNCATION_SUFFIX = "…[REDACTED:truncated]"
+
 
 def redact_payload(
     obj: Any, _path: str = "", _depth: int = 0
@@ -99,6 +112,11 @@ def redact_payload(
         ]
     if isinstance(obj, str):
         red, counts = redact_text(obj)
+        if len(red) > _MAX_LEAF_LEN:
+            # Redaction already ran on the full string, so cutting here can't
+            # expose a secret the tail contained (P2-8).
+            red = red[:_MAX_LEAF_LEN] + _TRUNCATION_SUFFIX
+            counts["truncated"] = counts.get("truncated", 0) + 1
         marks.extend(
             RedactionMark(kind=k, location=_path or "(root)", count=c)
             for k, c in counts.items()

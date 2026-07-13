@@ -1,4 +1,5 @@
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from datetime import UTC
 
 from super_skill.capture import EventLog
 from super_skill.mine import mine_families
@@ -151,6 +152,69 @@ def test_mine_strips_harness_notification_envelope(tmp_path):
     assert "tag push" in labels  # <result> content still mines
 
 
+def test_mine_surfaces_chinese_family(tmp_path):
+    """P0-1: Chinese task content must be minable. The ASCII-only tokenizer
+    replaced every CJK char with a space, so a Chinese prompt yielded 0 tokens
+    and Chinese-speaking users' recurring tasks were invisible to mining (and
+    thus systematically undercounted by GATE-1)."""
+    log = EventLog(root=tmp_path)
+    for sid in ("s1", "s2", "s3"):
+        log.append(EventType.USER_PROMPT_SUBMIT, sid,
+                   {"text": "修复失败的单元测试并重新运行确认通过"})
+    families = mine_families(log.iter_events(), min_sessions=3)
+    assert families, "recurring Chinese task family not surfaced"
+    assert all(f.session_count >= 3 for f in families)
+    labels = " ".join(f.label for f in families)
+    assert any(w in labels for w in ("修复", "测试", "运行")), labels
+
+
+def test_wal_file_mode_is_owner_only(tmp_path):
+    """P1-3 / audit P2-1: the WAL holds redacted-but-private session content and
+    must not be world/group-readable on a multi-user host."""
+    import stat
+
+    log = EventLog(root=tmp_path)
+    log.append(EventType.STOP, "s1", {"text": "hi"})
+    wal = next((tmp_path / "events").rglob("events.jsonl"))
+    mode = stat.S_IMODE(wal.stat().st_mode)
+    assert mode & 0o077 == 0, oct(mode)
+
+
+def test_prune_removes_events_older_than_ttl(tmp_path):
+    """P0-2 / FR-CAP-6: raw event days past the TTL are pruned; recent ones kept.
+    Previously the TTL was documented but never implemented — events accumulated
+    without bound."""
+    from datetime import datetime
+
+    log = EventLog(root=tmp_path)
+    for day in ("2020-01-01", "2099-12-30"):
+        d = log.events_dir / day
+        d.mkdir(parents=True)
+        (d / "events.jsonl").write_text('{"x":1}\n', encoding="utf-8")
+    now = datetime(2099, 12, 31, tzinfo=UTC)
+    # dry-run names the stale day but deletes nothing
+    would = log.prune(days=14, now=now, apply=False)
+    assert "2020-01-01" in would and "2099-12-30" not in would
+    assert (log.events_dir / "2020-01-01").exists()
+    # apply deletes the stale day, keeps the recent one
+    pruned = log.prune(days=14, now=now, apply=True)
+    assert pruned == ["2020-01-01"]
+    assert not (log.events_dir / "2020-01-01").exists()
+    assert (log.events_dir / "2099-12-30").exists()
+
+
+def test_prune_ignores_non_date_dirs_and_missing(tmp_path):
+    """No events dir → no-op; a non-date dir name is never pruned."""
+    from datetime import datetime
+
+    log = EventLog(root=tmp_path)
+    assert log.prune(days=14) == []  # events dir absent
+    (log.events_dir / "not-a-date").mkdir(parents=True)
+    now = datetime(2099, 1, 1, tzinfo=UTC)
+    assert log.prune(days=14, now=now, apply=True) == []
+    assert (log.events_dir / "not-a-date").exists()
+
+
 def test_mine_empty(tmp_path):
     assert mine_families(EventLog(root=tmp_path).iter_events()) == []
 
@@ -193,3 +257,23 @@ def test_mine_ignores_envelope_and_redaction_noise(tmp_path):
     assert "openai" not in labels
     # real content still mines
     assert any(w in labels for w in ("flaky", "retry", "pipeline"))
+
+
+def test_wal_event_stamped_with_schema_version(tmp_path):
+    """P3-4 / audit N3: each WAL line carries a schema_version so a newer field
+    added to CaptureEvent later is readable by an older reader (extra tolerated)."""
+    import json
+
+    from super_skill.schemas import SCHEMA_VERSION
+
+    log = EventLog(root=tmp_path)
+    log.append(EventType.PRE_TOOL_USE, "s1", {"tool": "pytest"})
+    line = next(iter(log.root.glob("**/events.jsonl"))).read_text().splitlines()[0]
+    rec = json.loads(line)
+    assert rec["schema_version"] == SCHEMA_VERSION
+    # a future field on the line must not break iteration (extra="ignore")
+    rec["future_field"] = 1
+    next(iter(log.root.glob("**/events.jsonl"))).write_text(
+        json.dumps(rec) + "\n", encoding="utf-8"
+    )
+    assert next(iter(log.iter_events())).event_type == EventType.PRE_TOOL_USE

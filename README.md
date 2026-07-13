@@ -33,7 +33,10 @@ super-skill treats your skills like packages: **versioned, auditable, reversible
 - **Redaction before disk** — session capture strips secrets and private paths
   *before* anything is written; secret values never reach the log.
 - **Safety-gated promotion** — a candidate becomes a skill only through two hard
-  gates (an instruction-layer adversarial scan + a deterministic eval-lite).
+  gates (an instruction-layer adversarial scan + a deterministic eval-lite). The
+  scan is a *rule* gate — it flags direct English/Chinese imperatives and known
+  obfuscations, not arbitrary paraphrase — so it is a backstop, not a guarantee:
+  always read the full SKILL.md before approving.
 - **Runs where your agent runs** — a Claude Code plugin, a Codex install package,
   and a host-agnostic CLI, all driven by the same `super-skill` command.
 
@@ -89,6 +92,7 @@ The CLI speaks Codex natively via `--host codex` — `super-skill seed --host co
 | `doctor` / `doctor --fix` | Integrity check (hashes, active pointer, host sync); `--fix` restores git-recoverable versions and re-materializes drift, then re-verifies. |
 | `capture` | Append a host event to the redacted WAL — reads hook JSON on stdin, never fails the session. |
 | `mine` | Surface task families recurring across ≥3 distinct sessions; nudges you once enough new sessions accumulate. |
+| `prune [--days N] [--apply]` | Delete captured event days older than the TTL (FR-CAP-6); dry-run by default, `--apply` to delete. |
 | `candidate draft/show/approve/reject` | Turn a mined family into a skill: draft → review → two hard gates → promote & materialize. |
 | `hooks-config` | Print the `settings.json` hooks block that wires session capture. |
 

@@ -28,6 +28,13 @@ def test_host_skills_dir_env_overrides(monkeypatch, tmp_path):
     assert config.host_skills_dir("codex") == tmp_path / "cdx"
 
 
+def test_host_skills_dir_rejects_unknown_host():
+    """Review #3: an unknown host name must not silently resolve to the claude
+    dir — a bad materialized_hosts entry would otherwise write to the wrong host."""
+    with pytest.raises(ValueError, match="unknown host"):
+        config.host_skills_dir("bogus")
+
+
 def test_resolve_hosts():
     assert config.resolve_hosts("claude") == ["claude"]
     assert config.resolve_hosts("codex") == ["codex"]

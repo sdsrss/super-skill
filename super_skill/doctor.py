@@ -16,9 +16,11 @@ remains — an attempted fix is not a fix (see the doctor exit-code lesson).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import config
 from .registry import Registry, RegistryError
 from .skillmd import content_hash
 
@@ -30,9 +32,20 @@ class DoctorIssue:
     message: str
     kind: str = ""  # machine-dispatchable: see check_registry
     version: str | None = None
+    host: str | None = None  # host-scoped issues (host_missing / host_drift), P2-5
 
 
-def check_registry(reg: Registry, host_dir: Path | None = None) -> list[DoctorIssue]:
+def check_registry(
+    reg: Registry,
+    host_dir: Path | None = None,
+    *,
+    resolve_host: Callable[[str], Path] | None = None,
+) -> list[DoctorIssue]:
+    """Verify registry integrity and, per skill, host sync for every host the skill
+    was materialized to (``materialized_hosts``, P2-5). ``resolve_host`` maps a host
+    name to its skills dir (defaults to config; injectable for tests). ``host_dir``
+    is the legacy single-host fallback used only for skills with no recorded hosts."""
+    resolve_host = resolve_host or config.host_skills_dir
     issues: list[DoctorIssue] = []
     for rec in reg.list_skills():
         sid = rec.skill.skill_id
@@ -65,21 +78,32 @@ def check_registry(reg: Registry, host_dir: Path | None = None) -> list[DoctorIs
                                 kind="name_mismatch", version=ver)
                 )
 
-        if host_dir is not None and active is not None and active in rec.versions:
-            host_md = host_dir / sid / "SKILL.md"
-            if not host_md.exists():
-                issues.append(
-                    DoctorIssue(sid, "warn", "active version not materialized to host",
-                                kind="host_missing")
-                )
-            elif content_hash(host_md.read_text(encoding="utf-8")) != content_hash(
-                reg.version_text(sid, active)
-            ):
-                issues.append(
-                    DoctorIssue(sid, "warn",
-                                "host SKILL.md differs from active version (edited/stale)",
-                                kind="host_drift")
-                )
+        if active is not None and active in rec.versions:
+            # Check every host the skill was materialized to (P2-5). Legacy skills
+            # with no recorded hosts fall back to the single host_dir (label None).
+            tracked = rec.skill.materialized_hosts
+            if tracked:
+                pairs: list[tuple[str | None, Path]] = [(h, resolve_host(h)) for h in tracked]
+            elif host_dir is not None:
+                pairs = [(None, host_dir)]
+            else:
+                pairs = []
+            for host_label, hdir in pairs:
+                suffix = f" {host_label}" if host_label else ""
+                host_md = hdir / sid / "SKILL.md"
+                if not host_md.exists():
+                    issues.append(
+                        DoctorIssue(sid, "warn", f"active version not materialized to host{suffix}",
+                                    kind="host_missing", host=host_label)
+                    )
+                elif content_hash(host_md.read_text(encoding="utf-8")) != content_hash(
+                    reg.version_text(sid, active)
+                ):
+                    issues.append(
+                        DoctorIssue(sid, "warn",
+                                    f"host{suffix} SKILL.md differs from active version "
+                                    "(edited/stale)", kind="host_drift", host=host_label)
+                    )
 
     return issues
 
@@ -92,28 +116,39 @@ class RepairAction:
 
 
 def repair(
-    reg: Registry, host_dir: Path | None = None
+    reg: Registry,
+    host_dir: Path | None = None,
+    *,
+    resolve_host: Callable[[str], Path] | None = None,
 ) -> tuple[list[RepairAction], list[DoctorIssue]]:
     """Fix the mechanically-fixable issues, then RE-VERIFY.
 
     Returns (actions attempted, issues still present after re-check). The caller
     decides exit status from the *remaining* issues, never from attempts."""
+    resolve_host = resolve_host or config.host_skills_dir
     actions: list[RepairAction] = []
-    for issue in check_registry(reg, host_dir):
+    for issue in check_registry(reg, host_dir, resolve_host=resolve_host):
         if issue.kind in ("hash_mismatch", "file_missing") and issue.version is not None:
             rel = f"registry/skills/{issue.skill_id}/versions/{issue.version}/SKILL.md"
             try:
-                reg._git("checkout", "HEAD", "--", rel)
+                reg.git("checkout", "HEAD", "--", rel)
                 actions.append(RepairAction(issue, f"restored {rel} from git HEAD", True))
             except RegistryError as e:
                 actions.append(RepairAction(issue, f"git restore failed: {e}", False))
-        elif issue.kind in ("host_missing", "host_drift") and host_dir is not None:
+        elif issue.kind in ("host_missing", "host_drift"):
+            # Re-materialize to the SPECIFIC drifted host (P2-5), not just claude.
+            hdir = resolve_host(issue.host) if issue.host else host_dir
+            if hdir is None:
+                continue
             try:
-                reg.materialize(issue.skill_id, host_dir)
-                actions.append(RepairAction(issue, "re-materialized active version to host", True))
+                reg.materialize(issue.skill_id, hdir, host_name=issue.host)
+                where = f" ({issue.host})" if issue.host else ""
+                actions.append(
+                    RepairAction(issue, f"re-materialized active version to host{where}", True)
+                )
             except RegistryError as e:
                 actions.append(RepairAction(issue, f"materialize failed: {e}", False))
         # dangling_active / name_mismatch need judgment — left for the user.
 
-    remaining = check_registry(reg, host_dir)
+    remaining = check_registry(reg, host_dir, resolve_host=resolve_host)
     return actions, remaining

@@ -81,6 +81,70 @@ def test_rollback_no_previous_fails(env):
     assert r.exit_code == 1
 
 
+def test_rollback_default_uses_dag_parent(env):
+    """P3-3 / audit L20: the default rollback target is the DAG parent, not the
+    version dict's insertion-order predecessor. After rolling back to v1 and
+    branching a v4 (parent v1), active=v4's parent is v1 but its insertion-order
+    predecessor is v3 — they must not be confused."""
+    from super_skill import config
+    from super_skill.registry import Registry
+    from super_skill.schemas import CandidateType, OperationType
+
+    reg = Registry(root=config.state_root())
+    reg.init()
+
+    def _md(v: str) -> str:
+        return f"---\nname: alpha\ndescription: {v} desc\n---\nbody {v}\n"
+
+    reg.add_version("alpha", _md("v1"), CandidateType.CAPTURED, [])
+    reg.add_version("alpha", _md("v2"), CandidateType.FIX, [])
+    reg.add_version("alpha", _md("v3"), CandidateType.FIX, [])
+    reg.set_active("alpha", "v1", op=OperationType.ROLLBACK)
+    reg.add_version("alpha", _md("v4"), CandidateType.FIX, [])  # parent=v1, active=v4
+
+    r = runner.invoke(app, ["rollback", "alpha"])
+    assert r.exit_code == 0, r.output
+    assert "-> v1" in r.output, r.output  # DAG parent, not insertion-pred v3
+
+
+def _dangle_active(name: str) -> None:
+    """Point a skill's active pointer at a nonexistent version (a dangling
+    pointer — the exact state doctor reports as 'needs manual fix')."""
+    from super_skill import config
+    from super_skill.registry import Registry
+
+    reg = Registry(root=config.state_root())
+    rec = reg.get(name)
+    rec.skill.active_version = "v99"
+    reg._write(rec)
+
+
+def test_explain_dangling_pointer_no_crash(env):
+    """P2-4 / audit P2-5: a dangling active pointer is the state doctor tells the
+    user to fix — explain (a diagnosis command) must give a friendly hint, not a
+    raw ValueError traceback."""
+    host = env
+    _make_skill(host, "alpha", "only one")
+    runner.invoke(app, ["seed"])
+    _dangle_active("alpha")
+    r = runner.invoke(app, ["explain", "alpha"])
+    assert r.exception is None, r.output  # no uncaught ValueError
+    assert "doctor" in r.output
+
+
+def test_rollback_dangling_pointer_no_crash(env):
+    """P2-4 / audit P2-5: rollback on a dangling pointer must fail cleanly, not
+    crash with ValueError from versions.index()."""
+    host = env
+    _make_skill(host, "alpha", "only one")
+    runner.invoke(app, ["seed"])
+    _dangle_active("alpha")
+    r = runner.invoke(app, ["rollback", "alpha"])
+    assert r.exit_code == 1
+    assert not isinstance(r.exception, ValueError)
+    assert "doctor" in r.output
+
+
 def test_capture_from_stdin_and_mine(env):
     import json
 
@@ -240,6 +304,16 @@ def test_candidate_flow_cli(env):
     r = runner.invoke(app, ["candidate", "show", cid])
     assert r.exit_code == 0 and "SKILL.md" in r.output
 
+    # user edits the draft (removes the TODO/EDIT scaffold) before approving —
+    # an unedited template is refused by the approve quality gate (audit P2-2).
+    from super_skill import config
+    from super_skill.candidate import CandidateStore
+    CandidateStore(config.state_root()).write_skill_md(
+        cid,
+        "---\nname: dependency-resolution\ndescription: resolve lockfile drift\n---\n"
+        "Run the resolver, read the conflict, pin the version.\n",
+    )
+
     r = runner.invoke(app, ["candidate", "approve", cid, "--reason", "reusable"])
     assert r.exit_code == 0, r.output
     assert (host / cid / "SKILL.md").exists()
@@ -250,6 +324,44 @@ def test_candidate_flow_cli(env):
     # re-approving the same candidate is refused (status already approved)
     r = runner.invoke(app, ["candidate", "approve", cid])
     assert r.exit_code == 1
+
+
+def test_approve_extra_host_failure_points_to_materialize(env, monkeypatch):
+    """P3-2 / audit L17: when approve succeeds on the primary host but the extra
+    host materialize fails, the candidate IS approved — the error must point at the
+    `materialize` recovery command, not read as an approve failure (re-running
+    approve would say 'already approved')."""
+    import json
+
+    from super_skill import config
+    from super_skill.candidate import CandidateStore
+    from super_skill.registry import Registry, RegistryError
+
+    for sid in ("s1", "s2", "s3"):
+        runner.invoke(app, ["capture"], input=json.dumps({
+            "hook_event_name": "UserPromptSubmit", "session_id": sid,
+            "text": "dependency resolution failure in lockfile"}))
+    runner.invoke(app, ["candidate", "draft"])
+    CandidateStore(config.state_root()).write_skill_md(
+        "dependency-resolution",
+        "---\nname: dependency-resolution\ndescription: resolve lockfile drift\n---\n"
+        "Run the resolver, read the conflict, pin the version.\n")
+
+    calls = {"n": 0}
+    real = Registry.materialize
+
+    def flaky(self, skill_id, host_dir, *, host_name=None):
+        calls["n"] += 1
+        if calls["n"] == 2:  # the extra host (second materialize) fails
+            raise RegistryError("simulated extra-host failure")
+        return real(self, skill_id, host_dir, host_name=host_name)
+
+    monkeypatch.setattr(Registry, "materialize", flaky)
+    r = runner.invoke(app, ["candidate", "approve", "dependency-resolution", "--host", "all"])
+    assert r.exit_code == 1
+    assert "materialize dependency-resolution --host" in r.output, r.output
+    # the candidate IS approved despite the extra-host failure
+    assert CandidateStore(config.state_root()).get("dependency-resolution").status == "approved"
 
 
 def test_candidate_approve_blocked_by_gate_cli(env):
@@ -442,3 +554,50 @@ def test_materialize_host_all_hits_both_sandboxes(env, tmp_path):
     assert r.exit_code == 0
     assert (host / "alpha" / "SKILL.md").exists()
     assert (codex / "alpha" / "SKILL.md").exists()  # codex sandbox, not ~/.agents
+
+
+def test_rollback_resyncs_every_materialized_host(env, tmp_path):
+    """P2-5 / audit P2-6: after `materialize --host all`, a plain `rollback`
+    (default --host claude) must still re-sync codex — otherwise codex keeps
+    serving the rolled-back version and doctor (claude-only) reports OK."""
+    host = env
+    codex = tmp_path / "codex"
+    _make_skill(host, "alpha", "v1 desc", body="ORIGINAL")
+    runner.invoke(app, ["seed"])
+    runner.invoke(app, ["materialize", "--host", "all"])  # both hosts now track alpha
+    # host edit -> seed picks up as v2, then push v2 to both hosts
+    (host / "alpha" / "SKILL.md").write_text(
+        "---\nname: alpha\ndescription: v2 desc\n---\nCHANGED\n"
+    )
+    runner.invoke(app, ["seed"])
+    runner.invoke(app, ["materialize", "--host", "all"])
+    assert "CHANGED" in (codex / "alpha" / "SKILL.md").read_text()
+
+    r = runner.invoke(app, ["rollback", "alpha", "--reason", "regressed"])  # default host
+    assert r.exit_code == 0, r.output
+    assert "ORIGINAL" in (host / "alpha" / "SKILL.md").read_text()
+    assert "ORIGINAL" in (codex / "alpha" / "SKILL.md").read_text()  # codex re-synced too
+
+
+def test_invalid_skill_id_rejected(env):
+    """P3-6 / audit L19: a skill_id with path-traversal / illegal chars must be
+    rejected up front, never fed into a filesystem path."""
+    _make_skill(env, "alpha", "first")
+    runner.invoke(app, ["seed"])
+    for bad in ("../../etc/passwd", "Has Space", "UPPER"):
+        r = runner.invoke(app, ["show", bad])
+        assert r.exit_code == 1
+        assert "invalid skill id" in r.output.lower()
+        r = runner.invoke(app, ["rollback", bad])
+        assert r.exit_code == 1
+        assert "invalid skill id" in r.output.lower()
+
+
+def test_invalid_candidate_id_rejected(env):
+    """Review #2: candidate ids reach candidates/<id>/ paths — a traversal id must
+    be rejected up front, consistent with the skill_id guard (L19 symmetry)."""
+    for bad in ("../../etc/passwd", "Has Space"):
+        for cmd in ("show", "approve", "reject"):
+            r = runner.invoke(app, ["candidate", cmd, bad])
+            assert r.exit_code == 1
+            assert "invalid candidate id" in r.output.lower(), (cmd, r.output)

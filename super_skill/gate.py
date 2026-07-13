@@ -26,8 +26,11 @@ from .skillmd import parse
 
 # Cheap-obfuscation defenses (M7): strip zero-width/format chars and fold the
 # common Cyrillic/Greek homoglyphs so ``с​url`` (ZWSP) and ``сurl`` (Cyrillic es)
-# can't slip a shell pipe past the ASCII regexes. Base64-encoded payloads remain
-# out of scope until the M1 LLM-judge layer.
+# can't slip a shell pipe past the ASCII regexes. A ``base64 -d | sh`` decode-pipe
+# is now caught too (P2-2), but this stays a RULE gate: it flags direct English +
+# Chinese imperatives and known obfuscations, NOT arbitrary paraphrase or novel
+# encodings. It gives NO safety guarantee — approving requires a human reading the
+# full SKILL.md. Semantic paraphrase detection lands at the M1 LLM-judge layer.
 _ZERO_WIDTH = dict.fromkeys(map(ord, "​‌‍⁠﻿"), None)
 _CONFUSABLES = str.maketrans({
     "а": "a", "с": "c", "ԁ": "d", "е": "e", "ɡ": "g", "һ": "h", "і": "i",
@@ -59,6 +62,11 @@ _RULES: list[tuple[str, re.Pattern[str]]] = [
             r"(?i)\beval\s*\(|\bexec\s*\(|\bos\.system\b|\bsubprocess\.\w+"
             r"|\bchmod\s+\+x\b|\bsudo\b|\bnpx\s+\S|"
             r"(?:run|execute)\s+(?:this|the\s+following|the\s+attached)\s+\w*\s*script"
+            # base64/hex decode piped to a shell hides the real command (P2-2):
+            r"|\bbase64\s+(?:-d|-D|--decode)\b[^\n]{0,60}\|\s*(?:bash|sh|zsh|python3?|node)"
+            r"|\bxxd\s+-r\b[^\n]{0,60}\|\s*(?:bash|sh)"
+            # Chinese: "执行/运行 (下面的/这个) 脚本" (P1-1):
+            r"|(?:执行|运行)(?:下面的?|下述|以下|这个|该|附带的?)?\s*脚本"
         ),
     ),
     (
@@ -67,6 +75,16 @@ _RULES: list[tuple[str, re.Pattern[str]]] = [
             r"(?i)~/\.ssh|~/\.aws|\bid_rsa\b|\.env\b|\bprivate[_-]?key\b"
             r"|\b(?:API[_-]?KEY|SECRET[_-]?KEY|ACCESS[_-]?KEY|AWS_SECRET_ACCESS_KEY)\b"
             r"|\b(?:password|passwd)\b"
+            # env/secret collected then transmitted, no curl keyword (P2-2):
+            r"|(?:collect|gather|dump|read|exfiltrate)\s+[^\n]{0,30}"
+            r"env(?:ironment)?\s+(?:var|value|variable)"
+            r"|(?:transmit|exfiltrate|upload|send|post)\s+[^\n]{0,40}"
+            r"(?:remote|endpoint|server|https?://)"
+            # Chinese exfil, both orders (P1-1):
+            r"|(?:密钥|凭据|口令|密码|环境变量|token)[^\n]{0,20}"
+            r"(?:发送|外传|上传|传输|泄露|窃取|传到|发到)"
+            r"|(?:发送|外传|上传|传输|泄露|窃取)[^\n]{0,20}"
+            r"(?:密钥|凭据|口令|密码|环境变量|token)"
         ),
     ),
     (
@@ -74,6 +92,9 @@ _RULES: list[tuple[str, re.Pattern[str]]] = [
         re.compile(
             r"(?i)\b(?:curl|wget)\b"
             r"|\b(?:download|fetch|retrieve)\b[^\n]{0,60}https?://"
+            # Chinese: "下载并运行 <url>" / "下载/拉取/获取 … 运行/执行" (P1-1):
+            r"|(?:下载|拉取|获取)(?:并|后|然后)?(?:运行|执行)"
+            r"|(?:下载|拉取|获取)[^\n]{0,20}(?:运行|执行)"
         ),
     ),
     (
@@ -83,6 +104,10 @@ _RULES: list[tuple[str, re.Pattern[str]]] = [
             r"|disregard\s+(?:the\s+)?(?:above|previous|prior)"
             r"|forget\s+(?:all\s+)?(?:previous|prior)"
             r"|you\s+are\s+now\b|override\s+[^\n]{0,40}instructions"
+            # Chinese overrides (P1-1):
+            r"|忽略(?:之前|以上|前面|上述)?(?:所有)?(?:的)?指令"
+            r"|无视(?:上述|之前|以上|前面)"
+            r"|忘记(?:之前|所有|以上|前面)"
         ),
     ),
 ]

@@ -57,6 +57,23 @@ def test_over_token_budget_fails_gate():
     assert any(c.name == "token_budget" and not c.passed for c in report.checks)
 
 
+def test_chinese_body_counts_toward_token_budget():
+    """P0-1: _approx_tokens split on whitespace, so CJK text (no spaces) counted
+    as ~1 token no matter how long — a huge Chinese SKILL.md sailed under the
+    budget. CJK chars must count individually (~1.5 chars/token)."""
+    body = "这是一段用于测试预算门的中文技能正文内容" * 400  # ~8000 CJK chars
+    report = eval_lite(_md(body))
+    assert not report.passed
+    assert any(c.name == "token_budget" and not c.passed for c in report.checks)
+
+
+def test_short_chinese_body_within_budget_passes():
+    """A normal-length Chinese body stays under budget (guards against the CJK
+    weighting over-counting a legitimate skill)."""
+    report = eval_lite(_md("修复失败的单元测试，读取报错，定位根因，重新运行确认通过。"))
+    assert report.passed
+
+
 def test_eval_error_carries_report():
     report = eval_lite(_md("KEY=sk-DEADBEEF0123456789abcdefghij"))
     err = EvalError(report)

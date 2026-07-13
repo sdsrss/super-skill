@@ -2,21 +2,24 @@
 
 Every event is redacted before it is written (capture.append never persists a raw
 payload), then appended as one JSON line under events/<date>/events.jsonl. Raw
-events are TTL-bounded (FR-CAP-6); structured products live elsewhere.
+events are pruned to a TTL by ``prune`` (FR-CAP-6); structured products live
+elsewhere.
 """
 
 from __future__ import annotations
 
 import os
+import shutil
 import uuid
 from collections.abc import Iterator
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from pydantic import ValidationError
 
 from . import config
 from .redact import redact_payload, redact_text
-from .schemas import CaptureEvent, EventType
+from .schemas import CaptureEvent, EventType, utcnow
 
 
 class EventLog:
@@ -60,7 +63,9 @@ class EventLog:
         # writer that can split a large line into multiple write() calls and let
         # two concurrent captures interleave into a corrupt line (H4).
         data = (event.model_dump_json() + "\n").encode("utf-8")
-        fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        # 0o600: the WAL holds redacted-but-private session content — never
+        # world/group-readable on a multi-user host (audit P2-1).
+        fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         try:
             # Loop on short writes so a very large line isn't silently truncated.
             while data:
@@ -95,3 +100,29 @@ class EventLog:
 
     def distinct_sessions(self) -> int:
         return len(self.session_ids())
+
+    def prune(
+        self, *, days: int, now: datetime | None = None, apply: bool = False
+    ) -> list[str]:
+        """Delete event-day directories older than ``days`` (FR-CAP-6 raw-event TTL).
+
+        Returns the day names pruned (in dry-run, the ones that WOULD be pruned).
+        A ``YYYY-MM-DD`` day dir strictly before ``now - days`` is removed; today's
+        dir and any non-date-named dir are kept. Callers default to dry-run because
+        deletion is destructive (§8 SAFETY)."""
+        if not self.events_dir.exists():
+            return []
+        cutoff = (now or utcnow()).date() - timedelta(days=days)
+        pruned: list[str] = []
+        for day in sorted(self.events_dir.iterdir()):
+            if not day.is_dir():
+                continue
+            try:
+                d = datetime.strptime(day.name, "%Y-%m-%d").date()
+            except ValueError:
+                continue  # not a date-named dir — never prune
+            if d < cutoff:
+                pruned.append(day.name)
+                if apply:
+                    shutil.rmtree(day)
+        return pruned

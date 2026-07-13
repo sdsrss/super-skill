@@ -2,8 +2,8 @@
 so ``status``/``mine`` can nudge once enough new sessions accumulate — "you
 solved X across N unmined sessions, run mine".
 
-It stores the SET of mined session ids, not a count (M13): the WAL is TTL-bounded,
-so an absolute count went silently wrong once old sessions rolled off — new
+It stores the SET of mined session ids, not a count (M13): the WAL is TTL-pruned
+(FR-CAP-6), so an absolute count went silently wrong once old sessions rolled off — new
 sessions could no longer exceed the stale high-water count. A set is robust:
 unmined = current session ids not in the mined set.
 

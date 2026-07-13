@@ -26,6 +26,11 @@ from .skillmd import SkillMdError, parse
 # tokenizer at WS, so approximate (~0.75 words/token) — deliberately conservative.
 TOKEN_BUDGET = 5000
 _WORDS_PER_TOKEN = 0.75
+# CJK text has no spaces, so whitespace word-counting scored a whole Chinese body
+# as ~1 token and a huge SKILL.md sailed under budget (P0-1). Count CJK chars
+# individually at ~1.5 chars/token.
+_CJK_RE = re.compile(r"[一-鿿㐀-䶿぀-ゟ゠-ヿ]")
+_CJK_CHARS_PER_TOKEN = 1.5
 
 
 @dataclass(frozen=True)
@@ -60,7 +65,9 @@ class EvalError(RuntimeError):
 
 
 def _approx_tokens(text: str) -> int:
-    return int(len(re.findall(r"\S+", text)) / _WORDS_PER_TOKEN)
+    cjk = len(_CJK_RE.findall(text))
+    words = len(re.findall(r"\S+", _CJK_RE.sub(" ", text)))
+    return int(words / _WORDS_PER_TOKEN + cjk / _CJK_CHARS_PER_TOKEN)
 
 
 def eval_lite(raw: str) -> EvalReport:

@@ -21,9 +21,14 @@ def host_skills_dir(host: str = "claude") -> Path:
     """Skills directory for a host distribution target (env-overridable).
 
     claude -> ~/.claude/skills (SUPER_SKILL_HOST_SKILLS);
-    codex  -> ~/.agents/skills (SUPER_SKILL_CODEX_SKILLS)."""
+    codex  -> ~/.agents/skills (SUPER_SKILL_CODEX_SKILLS).
+
+    An unknown host raises rather than silently falling back to the claude dir —
+    a stray materialized_hosts entry must never write to the wrong host (review #3)."""
     if host == "codex":
         return Path(os.environ.get("SUPER_SKILL_CODEX_SKILLS", "~/.agents/skills")).expanduser()
+    if host != "claude":
+        raise ValueError(f"unknown host {host!r} (expected one of: {', '.join(HOSTS)})")
     return Path(os.environ.get("SUPER_SKILL_HOST_SKILLS", "~/.claude/skills")).expanduser()
 
 
