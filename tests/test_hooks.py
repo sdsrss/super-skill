@@ -33,3 +33,22 @@ def test_custom_command_threaded_through():
 
 def test_output_is_json_serializable():
     json.dumps(hooks_settings())  # must not raise
+
+
+def test_session_start_also_wires_status_reminder():
+    """SessionStart carries a second entry (matcher=startup) running the
+    status-reminder command, so fresh sessions surface the mine backlog."""
+    entries = hooks_settings()["hooks"]["SessionStart"]
+    reminder = [
+        e
+        for e in entries
+        if any("status-reminder" in h["command"] for h in e["hooks"])
+    ]
+    assert len(reminder) == 1
+    assert reminder[0]["matcher"] == "startup"
+
+
+def test_reminder_command_follows_custom_command_prefix():
+    entries = hooks_settings(command="/opt/ss capture")["hooks"]["SessionStart"]
+    cmds = [h["command"] for e in entries for h in e["hooks"]]
+    assert "/opt/ss status-reminder" in cmds

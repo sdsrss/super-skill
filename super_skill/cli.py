@@ -9,7 +9,7 @@ import sys
 
 import typer
 
-from . import config, minestate
+from . import config, hooks, minestate
 from .candidate import CandidateError, CandidateStore, approve, draft_from_families, reject
 from .capture import EventLog
 from .doctor import check_registry, repair
@@ -308,6 +308,20 @@ def doctor(
     typer.echo(f"doctor: {len(errors)} error(s), {len(issues) - len(errors)} warning(s)")
     if errors:
         raise typer.Exit(1)
+
+
+@app.command("status-reminder")
+def status_reminder() -> None:
+    """SessionStart hook helper: print the unmined-backlog reminder envelope
+    (JSON) when the backlog crosses the nudge threshold; print nothing
+    otherwise. Never fails the session (NFR-3): any internal error is
+    swallowed and the command exits 0 silently."""
+    try:
+        payload = hooks.status_reminder_json(config.state_root())
+    except Exception:  # noqa: BLE001 — hook helper must never break a session
+        return
+    if payload:
+        typer.echo(payload)
 
 
 @app.command("hooks-config")
