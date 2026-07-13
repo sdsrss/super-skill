@@ -3,6 +3,27 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic versioning.
 
+## [0.12.1] - 2026-07-13
+
+Mine-backlog reminder UX fix. Backward-compatible.
+
+### Fixed
+- The SessionStart mine-backlog reminder now points at a path the user can
+  actually act on. Previously it advertised only the bare `super-skill mine`
+  CLI string, which is a dead end inside a Claude Code chat (no terminal, no
+  PATH) — users tried to run it as a slash command and found nothing. The
+  reminder now: (1) is explicitly labelled as coming from the super-skill
+  plugin, (2) makes "reply yes → the assistant runs mining for you" the primary
+  one-tap accept path (works regardless of install shape), and (3) surfaces the
+  `/super-skill:mine` slash command for plugin installs, with the raw CLI kept
+  only as a terminal fallback.
+
+### Added
+- Plugin-native `hooks/hooks.json` now wires the `status-reminder`
+  SessionStart/`startup` helper. Previously only the `hooks-config` settings.json
+  output carried it, so users who installed via the marketplace plugin (rather
+  than merging `hooks-config`) never received the mine-backlog nudge.
+
 ## [0.12.0] - 2026-07-13
 
 Proactive mine-backlog reminder. Backward-compatible (additive command +
