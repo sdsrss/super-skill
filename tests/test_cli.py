@@ -126,6 +126,53 @@ def test_mine_records_watermark_even_when_output_pipe_breaks(env, monkeypatch):
     assert minestate.mined_sessions(config.state_root()) == {"s1", "s2", "s3"}
 
 
+def _capture_sessions(n):
+    import json
+
+    for i in range(n):
+        payload = json.dumps({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": f"s{i}",
+            "text": "dependency resolution failure in lockfile",
+        })
+        runner.invoke(app, ["capture"], input=payload)
+
+
+def test_status_reminder_silent_when_no_backlog(env):
+    r = runner.invoke(app, ["status-reminder"])
+    assert r.exit_code == 0
+    assert r.output.strip() == ""
+
+
+def test_status_reminder_emits_envelope_on_backlog(env):
+    import json
+
+    _capture_sessions(3)  # default reminder threshold
+    r = runner.invoke(app, ["status-reminder"])
+    assert r.exit_code == 0
+    envelope = json.loads(r.output)
+    assert envelope["suppressOutput"] is True
+    out = envelope["hookSpecificOutput"]
+    assert out["hookEventName"] == "SessionStart"
+    assert "super-skill mine" in out["additionalContext"]
+    assert "NOT a user message" in out["additionalContext"]
+
+    runner.invoke(app, ["mine"])  # acknowledging clears the reminder
+    r = runner.invoke(app, ["status-reminder"])
+    assert r.exit_code == 0 and r.output.strip() == ""
+
+
+def test_status_reminder_never_fails_the_session(env, monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("synthetic")
+
+    monkeypatch.setattr("super_skill.cli.hooks.status_reminder_json", boom)
+    _capture_sessions(3)
+    r = runner.invoke(app, ["status-reminder"])
+    assert r.exit_code == 0  # NFR-3: a hook helper must never fail the session
+    assert r.output.strip() == ""
+
+
 def test_capture_malformed_input_never_fails(env):
     r = runner.invoke(app, ["capture"], input="not json at all")
     assert r.exit_code == 0  # NFR-3: hook must never fail the session
