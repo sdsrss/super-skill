@@ -5,13 +5,14 @@ arrive only if the GATE opens the M2-M5 research track."""
 from __future__ import annotations
 
 import json
+import os
 import sys
 
 import typer
 
 from . import config, hooks, minestate
 from .candidate import CandidateError, CandidateStore, approve, draft_from_families, reject
-from .capture import EventLog
+from .capture import DEFAULT_EVENT_TTL_DAYS, EventLog
 from .doctor import check_registry, repair
 from .evallite import EvalError, eval_lite
 from .gate import InstructionGateError, scan_skill_md
@@ -153,23 +154,77 @@ def mine(min_sessions: int = typer.Option(3, "--min-sessions")) -> None:
         typer.echo(f"{'sessions':>8}  {'events':>6}  family")
         for fam in families:
             typer.echo(f"{fam.session_count:>8}  {fam.event_count:>6}  {fam.label}")
+    _mine_disk_footer(log)
+
+
+def _human_size(n: int) -> str:
+    size = float(n)
+    for unit in ("B", "KB", "MB"):
+        if size < 1024:
+            return f"{size:.1f} {unit}" if unit != "B" else f"{n} B"
+        size /= 1024
+    return f"{size:.1f} GB"
+
+
+def _event_ttl_days() -> int:
+    """SUPER_SKILL_EVENT_TTL, shared by the mine footer and `prune` so the
+    footer can never recommend a command that would then reject the same env.
+    Invalid or negative values warn and fall back to the default."""
+    raw = os.environ.get("SUPER_SKILL_EVENT_TTL")
+    if not raw:
+        return DEFAULT_EVENT_TTL_DAYS
+    try:
+        ttl = int(raw)
+        if ttl < 0:
+            raise ValueError
+        return ttl
+    except ValueError:
+        typer.echo(
+            f"ignoring invalid SUPER_SKILL_EVENT_TTL={raw!r}; "
+            f"using default {DEFAULT_EVENT_TTL_DAYS}",
+            err=True,
+        )
+        return DEFAULT_EVENT_TTL_DAYS
+
+
+def _mine_disk_footer(log: EventLog) -> None:
+    """Post-mine WAL-footprint nudge (FR-CAP-6). mine is the natural moment the
+    user looks at captured data, so report its disk cost and — when day dirs have
+    aged past the TTL — the reclaim command. Read-only: dry-run prune, no delete.
+    stderr, so `mine | head`-style piping of the family table is unaffected."""
+    total, days = log.disk_usage()
+    if days == 0:
+        return
+    ttl = _event_ttl_days()
+    stale = log.prune(days=ttl)  # dry-run: names prunable days, deletes nothing
+    line = f"events on disk: {_human_size(total)} across {days} day(s); "
+    if stale:
+        line += (
+            f"{len(stale)} day(s) beyond the {ttl}-day TTL "
+            "— run 'super-skill prune --apply' to reclaim"
+        )
+    else:
+        line += f"all within the {ttl}-day TTL"
+    typer.echo(line, err=True)
 
 
 @app.command()
 def prune(
-    days: int = typer.Option(
-        14, "--days", envvar="SUPER_SKILL_EVENT_TTL",
-        help="Keep events within N days; older event days are pruned (FR-CAP-6).",
+    days: int | None = typer.Option(
+        None, "--days",
+        help=f"Keep events within N days (default {DEFAULT_EVENT_TTL_DAYS}, env "
+        "SUPER_SKILL_EVENT_TTL); older event days are pruned (FR-CAP-6).",
     ),
     apply: bool = typer.Option(
         False, "--apply", help="Actually delete. Default is a dry-run that only reports.",
     ),
 ) -> None:
     """Prune captured event days older than the TTL (default 14 days; dry-run)."""
+    ttl = days if days is not None else _event_ttl_days()
     log = EventLog()
-    pruned = log.prune(days=days, apply=apply)
+    pruned = log.prune(days=ttl, apply=apply)
     if not pruned:
-        typer.echo(f"nothing to prune (all event days within {days} days)")
+        typer.echo(f"nothing to prune (all event days within {ttl} days)")
         return
     verb = "pruned" if apply else "would prune (dry-run — pass --apply to delete)"
     typer.echo(f"{verb} {len(pruned)} day(s): {', '.join(pruned)}")

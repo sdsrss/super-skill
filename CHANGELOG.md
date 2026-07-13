@@ -3,6 +3,27 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic versioning.
 
+## [Unreleased]
+
+### Added
+- `mine` now ends with an `events on disk:` footer (stderr) reporting the raw-event
+  WAL footprint and, when event days have aged past the FR-CAP-6 TTL, a one-line
+  `super-skill prune --apply` reclaim hint — so the WAL's growth is visible at the
+  moment the user is already looking at captured data. The `/super-skill:mine`
+  plugin command offers to run the prune on the user's behalf when the footer
+  flags prunable days. Deletion itself remains explicit and human-confirmed;
+  nothing is auto-pruned.
+
+### Fixed
+- TTL hardening (review round on the footer change): an unparseable
+  `SUPER_SKILL_EVENT_TTL` now warns and falls back to the 14-day default on both
+  the footer and `prune` (previously `prune` exited 2, so the footer could
+  recommend a command that then failed); a negative TTL clamps to 0 instead of
+  computing a future cutoff that would have deleted today's events; a TTL large
+  enough to overflow the date range means "nothing is stale" instead of crashing;
+  and the footer's day count now uses `prune`'s definition of a day (date-named
+  dirs only), so it never reports days that can't be reclaimed.
+
 ## [0.13.0] - 2026-07-13
 
 A hardening release implementing the full v0.12.1 comprehensive-audit roadmap

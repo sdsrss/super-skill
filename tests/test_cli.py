@@ -21,6 +21,8 @@ def env(tmp_path, monkeypatch):
     # P4-3: pin the codex target too, so a --host codex|all path can never write
     # to the real ~/.agents/skills. Tests needing it derive `tmp_path / "codex"`.
     monkeypatch.setenv("SUPER_SKILL_CODEX_SKILLS", str(tmp_path / "codex"))
+    # A developer's exported TTL must not leak into footer/prune assertions.
+    monkeypatch.delenv("SUPER_SKILL_EVENT_TTL", raising=False)
     return host
 
 
@@ -601,3 +603,74 @@ def test_invalid_candidate_id_rejected(env):
             r = runner.invoke(app, ["candidate", cmd, bad])
             assert r.exit_code == 1
             assert "invalid candidate id" in r.output.lower(), (cmd, r.output)
+
+
+def test_mine_footer_flags_days_beyond_ttl(env):
+    """Post-mine prune hint: a day dir older than the TTL must surface the WAL
+    size and the exact reclaim command, so the WAL never grows silently."""
+    from super_skill.capture import EventLog
+
+    stale = EventLog().events_dir / "2020-01-01"
+    stale.mkdir(parents=True)
+    (stale / "events.jsonl").write_text('{"x":1}\n', encoding="utf-8")
+    r = runner.invoke(app, ["mine"])
+    assert r.exit_code == 0, r.output
+    # spec constraint: footer is stderr-only — the stdout family table stays
+    # machine-readable (mine | head pipelines).
+    assert "events on disk" in r.stderr
+    assert "events on disk" not in r.stdout
+    assert "beyond" in r.stderr
+    assert "prune --apply" in r.stderr
+
+
+def test_mine_footer_all_within_ttl(env):
+    """Fresh-only WAL: footer reports size for awareness but no prune nudge."""
+    from super_skill.capture import EventLog
+    from super_skill.schemas import EventType
+
+    EventLog().append(EventType.USER_PROMPT_SUBMIT, "s1", {"text": "fresh event"})
+    r = runner.invoke(app, ["mine"])
+    assert r.exit_code == 0, r.output
+    assert "events on disk" in r.stderr
+    assert "all within" in r.stderr
+    assert "prune --apply" not in r.stderr
+
+
+def test_mine_footer_absent_on_empty_wal(env):
+    r = runner.invoke(app, ["mine"])
+    assert r.exit_code == 0, r.output
+    assert "events on disk" not in r.output
+
+
+def test_mine_footer_respects_ttl_env(env, monkeypatch):
+    """SUPER_SKILL_EVENT_TTL drives the footer judgment, same as prune."""
+    from super_skill.capture import EventLog
+
+    stale = EventLog().events_dir / "2020-01-01"
+    stale.mkdir(parents=True)
+    (stale / "events.jsonl").write_text('{"x":1}\n', encoding="utf-8")
+    monkeypatch.setenv("SUPER_SKILL_EVENT_TTL", "1000000")
+    r = runner.invoke(app, ["mine"])
+    assert r.exit_code == 0, r.output
+    assert "all within" in r.stderr
+    assert "prune --apply" not in r.stderr
+
+
+def test_mine_footer_and_prune_agree_on_invalid_ttl_env(env, monkeypatch):
+    """Review finding: the footer must never recommend a command that then fails.
+    An unparseable SUPER_SKILL_EVENT_TTL falls back to the default on BOTH the
+    footer and the prune command (with a stderr warning) — previously typer's
+    envvar parsing made `prune` exit 2 while the footer silently used 14."""
+    from super_skill.capture import EventLog
+
+    stale = EventLog().events_dir / "2020-01-01"
+    stale.mkdir(parents=True)
+    (stale / "events.jsonl").write_text('{"x":1}\n', encoding="utf-8")
+    monkeypatch.setenv("SUPER_SKILL_EVENT_TTL", "abc")
+    r = runner.invoke(app, ["mine"])
+    assert r.exit_code == 0, r.output
+    assert "14-day TTL" in r.stderr
+    assert "invalid SUPER_SKILL_EVENT_TTL" in r.stderr
+    r = runner.invoke(app, ["prune"])  # dry-run must work, not exit 2
+    assert r.exit_code == 0, r.output
+    assert "2020-01-01" in r.output

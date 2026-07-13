@@ -277,3 +277,34 @@ def test_wal_event_stamped_with_schema_version(tmp_path):
         json.dumps(rec) + "\n", encoding="utf-8"
     )
     assert next(iter(log.iter_events())).event_type == EventType.PRE_TOOL_USE
+
+
+def test_disk_usage_reports_bytes_and_days(tmp_path):
+    """Input for the post-mine prune hint: WAL footprint as (bytes, day dirs)."""
+    log = EventLog(root=tmp_path)
+    assert log.disk_usage() == (0, 0)
+    log.append(EventType.USER_PROMPT_SUBMIT, "s1", {"text": "hello disk usage"})
+    total, days = log.disk_usage()
+    assert days == 1
+    assert total > 0
+
+
+def test_prune_negative_days_clamped_keeps_today(tmp_path):
+    """Review finding: a negative TTL must not compute a future cutoff that
+    deletes today's fresh events — negative days clamp to 0 (today survives)."""
+    log = EventLog(root=tmp_path)
+    log.append(EventType.USER_PROMPT_SUBMIT, "s1", {"text": "keep me"})
+    assert log.prune(days=-5, apply=True) == []
+    assert log.count() == 1
+
+
+def test_disk_usage_days_counts_only_date_dirs(tmp_path):
+    """Footer 'day(s)' must match prune's definition of a day: a non-date dir
+    contributes bytes (real disk cost) but is never a reclaimable day."""
+    log = EventLog(root=tmp_path)
+    d = log.events_dir / "not-a-date"
+    d.mkdir(parents=True)
+    (d / "junk.txt").write_text("x" * 100, encoding="utf-8")
+    total, days = log.disk_usage()
+    assert days == 0
+    assert total >= 100

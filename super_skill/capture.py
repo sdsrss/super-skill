@@ -12,7 +12,7 @@ import os
 import shutil
 import uuid
 from collections.abc import Iterator
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -20,6 +20,18 @@ from pydantic import ValidationError
 from . import config
 from .redact import redact_payload, redact_text
 from .schemas import CaptureEvent, EventType, utcnow
+
+# FR-CAP-6 raw-event TTL. Single source of truth for `prune` and the post-mine
+# footer; both honor the SUPER_SKILL_EVENT_TTL env override.
+DEFAULT_EVENT_TTL_DAYS = 14
+
+
+def _parse_day(name: str) -> date | None:
+    """A WAL day dir is strictly YYYY-MM-DD; anything else is not a day."""
+    try:
+        return datetime.strptime(name, "%Y-%m-%d").date()
+    except ValueError:
+        return None
 
 
 class EventLog:
@@ -101,6 +113,26 @@ class EventLog:
     def distinct_sessions(self) -> int:
         return len(self.session_ids())
 
+    def disk_usage(self) -> tuple[int, int]:
+        """Return (total_bytes, day_dir_count) of the on-disk WAL — read-only.
+
+        Sums every file under events/ (not just events.jsonl) so the number
+        matches what the user would see with ``du``. Only date-named dirs count
+        as days — the same definition ``prune`` uses — so the footer never
+        reports days that can't be reclaimed."""
+        if not self.events_dir.exists():
+            return (0, 0)
+        total = 0
+        days = 0
+        for entry in sorted(self.events_dir.iterdir()):
+            if entry.is_dir():
+                if _parse_day(entry.name) is not None:
+                    days += 1
+                total += sum(f.stat().st_size for f in entry.rglob("*") if f.is_file())
+            elif entry.is_file():
+                total += entry.stat().st_size
+        return (total, days)
+
     def prune(
         self, *, days: int, now: datetime | None = None, apply: bool = False
     ) -> list[str]:
@@ -112,14 +144,21 @@ class EventLog:
         deletion is destructive (§8 SAFETY)."""
         if not self.events_dir.exists():
             return []
-        cutoff = (now or utcnow()).date() - timedelta(days=days)
+        # Negative days would put the cutoff in the future and delete today's
+        # fresh events — clamp to 0 ("keep only today").
+        days = max(days, 0)
+        try:
+            cutoff = (now or utcnow()).date() - timedelta(days=days)
+        except OverflowError:
+            # A TTL larger than representable time (e.g. SUPER_SKILL_EVENT_TTL=1000000)
+            # means nothing can be stale — not a crash.
+            return []
         pruned: list[str] = []
         for day in sorted(self.events_dir.iterdir()):
             if not day.is_dir():
                 continue
-            try:
-                d = datetime.strptime(day.name, "%Y-%m-%d").date()
-            except ValueError:
+            d = _parse_day(day.name)
+            if d is None:
                 continue  # not a date-named dir — never prune
             if d < cutoff:
                 pruned.append(day.name)
