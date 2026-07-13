@@ -70,6 +70,29 @@ def test_issue_shape():
     assert (i.skill_id, i.severity, i.message) == ("s", "error", "boom")
 
 
+def test_multi_host_drift_detected_per_host(reg, tmp_path):
+    """P2-5 / audit P2-6: a skill materialized to claude + codex, then drifted on
+    codex only, must be caught on codex specifically — not reported OK because
+    doctor only looked at claude."""
+    claude, codex = tmp_path / "claude", tmp_path / "codex"
+    reg.materialize("alpha", claude, host_name="claude")
+    reg.materialize("alpha", codex, host_name="codex")
+    (codex / "alpha" / "SKILL.md").write_text(_md("alpha", "first", body="DRIFTED"),
+                                              encoding="utf-8")
+
+    def _resolve(h: str):
+        return {"claude": claude, "codex": codex}[h]
+
+    issues = check_registry(reg, resolve_host=_resolve)
+    drift = [i for i in issues if "differs" in i.message]
+    assert len(drift) == 1
+    assert drift[0].host == "codex"
+    # repair re-materializes the drifted host back into sync
+    actions, remaining = repair(reg, resolve_host=_resolve)
+    assert any(a.ok and "materialized" in a.action for a in actions)
+    assert not any("differs" in i.message for i in remaining)
+
+
 def test_repair_restores_tampered_file(reg):
     p = reg.skills_root / "alpha" / "versions" / "v1" / "SKILL.md"
     p.write_text(_md("alpha", "first", body="TAMPERED"), encoding="utf-8")

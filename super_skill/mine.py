@@ -54,13 +54,27 @@ _HARNESS_STOP = frozenset(
     " subagent_tokens tool_uses duration_ms".split()
 )
 
+# CJK has no whitespace word boundaries, so the ASCII-only path below drops it
+# entirely. Emit char-2grams from CJK runs as tokens so Chinese task content is
+# minable (P0-1) — the ASCII tokenizer replaced every CJK char with a space, so
+# a Chinese prompt yielded 0 tokens and those tasks were invisible to mining and
+# systematically undercounted by GATE-1.
+_CJK_RE = re.compile(r"[一-鿿㐀-䶿]+")
+
 
 def _tokens(text: str) -> list[str]:
     text = _HARNESS_ELEMENT_RE.sub(" ", text)
     text = _TAG_RE.sub(" ", text)
     text = _REDACTION_RE.sub(" ", text)
-    out = []
-    for t in re.sub(r"[^a-z0-9/_.\- ]", " ", text.lower()).split():
+    text = text.lower()
+    out: list[str] = []
+    # CJK runs -> adjacent-char 2grams (a lone char is too sparse to signal a
+    # family); these flow into the same bigram recurrence counting as Latin tokens.
+    for run in _CJK_RE.findall(text):
+        out.extend(run[i : i + 2] for i in range(len(run) - 1))
+    # Latin/ASCII path: strip CJK first so it isn't re-processed into noise.
+    ascii_text = _CJK_RE.sub(" ", text)
+    for t in re.sub(r"[^a-z0-9/_.\- ]", " ", ascii_text).split():
         t = t.strip("-./_")
         if len(t) >= 3 and not t.isdigit() and t not in _STOP and t not in _HARNESS_STOP:
             out.append(t)

@@ -58,6 +58,12 @@ def test_approve_promotes_to_registry_and_materializes(tmp_path):
     reg = Registry(root=tmp_path / "state")
     host = tmp_path / "host"
     draft_from_families(store, [_fam("dependency resolution", sessions=4)])
+    # human edits the draft (removes TODO/EDIT scaffold) before approving
+    store.write_skill_md(
+        "dependency-resolution",
+        "---\nname: dependency-resolution\ndescription: resolve lockfile drift\n---\n"
+        "Run the resolver, read the conflict, pin the version.\n",
+    )
 
     sv = approve(store, reg, "dependency-resolution", host, reason="looks reusable")
 
@@ -142,6 +148,11 @@ def test_approve_is_crash_idempotent(tmp_path):
     reg = Registry(root=tmp_path / "state")
     host = tmp_path / "host"
     draft_from_families(store, [_fam("dependency resolution")])
+    store.write_skill_md(
+        "dependency-resolution",
+        "---\nname: dependency-resolution\ndescription: resolve lockfile drift\n---\n"
+        "Run the resolver, read the conflict, pin the version.\n",
+    )
     sv1 = approve(store, reg, "dependency-resolution", host)
     # simulate crash: version promoted + committed, but candidate.save never ran
     cand = store.get("dependency-resolution")
@@ -154,6 +165,35 @@ def test_approve_is_crash_idempotent(tmp_path):
     rec = reg.get("dependency-resolution")
     assert list(rec.versions) == ["v1"], f"double-promoted: {list(rec.versions)}"
     assert sv2.version == sv1.version
+
+
+def test_approve_blocks_unedited_template(tmp_path):
+    """P1-2 / audit P2-2: an unedited draft (TODO placeholders + 'EDIT before
+    approving' description) is a hollow skill and must be blocked before any write
+    — it must not reach the registry or the host and start routing."""
+    store = CandidateStore(root=tmp_path / "state")
+    reg = Registry(root=tmp_path / "state")
+    host = tmp_path / "host"
+    draft_from_families(store, [_fam("dependency resolution")])  # left unedited
+
+    with pytest.raises(CandidateError, match="placeholder|unedited|TODO"):
+        approve(store, reg, "dependency-resolution", host)
+
+    assert reg.get("dependency-resolution") is None  # nothing promoted
+    assert not (host / "dependency-resolution").exists()  # nothing materialized
+    assert store.get("dependency-resolution").status == "pending"
+
+
+def test_candidate_json_mode_is_owner_only(tmp_path):
+    """P1-3 / audit P2-1: candidate.json carries mined family labels (session-
+    derived) — not world/group-readable."""
+    import stat
+
+    store = CandidateStore(root=tmp_path / "state")
+    draft_from_families(store, [_fam("dependency resolution")])
+    p = store._cdir("dependency-resolution") / "candidate.json"
+    mode = stat.S_IMODE(p.stat().st_mode)
+    assert mode & 0o077 == 0, oct(mode)
 
 
 def test_approve_unknown_candidate_raises(tmp_path):
@@ -172,3 +212,20 @@ def test_candidates_excluded_from_registry_git(tmp_path):
     draft_from_families(store, [_fam("dependency resolution")])
     tracked = reg._git("status", "--porcelain")
     assert "candidates/" not in tracked
+
+
+def test_candidate_json_stamped_and_tolerates_unknown_fields(tmp_path):
+    """P3-4 / audit N3: candidate.json carries a schema_version and an older CLI
+    reading one written by a newer super-skill (extra field) must not crash."""
+    import json
+
+    from super_skill.schemas import SCHEMA_VERSION
+
+    store = CandidateStore(root=tmp_path / "state")
+    draft_from_families(store, [_fam("dependency resolution")])
+    p = store._cdir("dependency-resolution") / "candidate.json"
+    data = json.loads(p.read_text())
+    assert data["schema_version"] == SCHEMA_VERSION
+    data["future_field"] = "from a newer super-skill"
+    p.write_text(json.dumps(data), encoding="utf-8")
+    assert store.get("dependency-resolution") is not None  # tolerated, not corrupt

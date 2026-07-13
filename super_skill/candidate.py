@@ -23,6 +23,7 @@ from .gate import InstructionGateError, scan_skill_md
 from .mine import OpportunityFamily
 from .registry import Registry
 from .schemas import (
+    SCHEMA_VERSION,
     CandidateType,
     Provenance,
     ProvenanceKind,
@@ -33,6 +34,16 @@ from .schemas import (
 from .skillmd import parse
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+# Fingerprints of an unedited ``_draft_md`` scaffold. A candidate still carrying
+# any of these is a hollow skill the human never filled in — block it at approve
+# so it can't be promoted and start routing (audit P2-2). The phrases are specific
+# to the template so a legitimate skill that merely mentions "TODO" isn't caught.
+_TEMPLATE_MARKERS = ("EDIT before approving", "TODO: the trigger", "TODO: the procedure")
+
+
+def _has_template_placeholder(raw: str) -> bool:
+    return any(marker in raw for marker in _TEMPLATE_MARKERS)
 
 
 def slugify(label: str) -> str:
@@ -48,8 +59,10 @@ class CandidateError(RuntimeError):
 class Candidate(BaseModel):
     """Persisted metadata for one drafted candidate (SKILL.md stored alongside)."""
 
-    model_config = ConfigDict(extra="forbid")
+    # extra="ignore" + schema_version: forward-tolerant read of candidate.json (P3-4).
+    model_config = ConfigDict(extra="ignore")
 
+    schema_version: int = SCHEMA_VERSION
     candidate_id: str
     family_label: str
     session_count: int
@@ -124,6 +137,7 @@ class CandidateStore:
         p = cdir / "candidate.json"
         tmp = p.with_suffix(".json.tmp")
         tmp.write_text(cand.model_dump_json(indent=2), encoding="utf-8")
+        os.chmod(tmp, 0o600)  # mined family labels are session-derived — not world-readable (P2-1)
         os.replace(tmp, p)
 
 
@@ -156,6 +170,7 @@ def approve(
     cand_id: str,
     host_dir: Path,
     *,
+    host_name: str | None = None,
     actor: str = "user",
     reason: str | None = None,
 ) -> SkillVersion:
@@ -179,6 +194,14 @@ def approve(
     findings = scan_skill_md(raw)
     if findings:
         raise InstructionGateError(findings)
+    # Quality gate (audit P2-2): a draft still carrying its TODO/"EDIT before
+    # approving" scaffold is a hollow skill — block before promote so it can't
+    # reach the host and route. Cheap deterministic check, before any write.
+    if _has_template_placeholder(raw):
+        raise CandidateError(
+            f"candidate {cand_id!r} still has unedited draft placeholders "
+            "(TODO / 'EDIT before approving') — edit SKILL.md before approving"
+        )
     # Deterministic eval-lite hard gate (docs/04 §1.6): schema, zero secret leak,
     # token budget. The No Skill/Skill two-arm is Insufficient Evidence at WS.
     report = eval_lite(raw)
@@ -201,7 +224,7 @@ def approve(
         actor=actor,
         reason=reason or f"approve candidate {cand_id}",
     )
-    reg.materialize(skill_id, host_dir)
+    reg.materialize(skill_id, host_dir, host_name=host_name)
 
     cand.status = "approved"
     cand.skill_id = skill_id

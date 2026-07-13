@@ -18,7 +18,7 @@ from .gate import InstructionGateError, scan_skill_md
 from .hooks import hooks_settings
 from .mine import mine_families
 from .registry import Registry, RegistryError
-from .schemas import EventType, OperationType
+from .schemas import NAME_RE, EventType, OperationType
 from .seed import seed_from_host
 from .skillmd import SkillMdError
 
@@ -29,6 +29,18 @@ app.add_typer(candidate_app, name="candidate")
 
 def _registry() -> Registry:
     return Registry(root=config.state_root())
+
+
+def _require_valid_name(value: str, kind: str = "skill id") -> None:
+    """Reject a user-supplied id that isn't an agentskills.io-legal name before it
+    reaches a filesystem path — a ``../`` id would otherwise let a command traverse
+    outside the registry/candidates dir (self-harm, but still, audit L19 + review #2)."""
+    if not NAME_RE.match(value):
+        typer.echo(
+            f"invalid {kind} {value!r} (expected lowercase alphanumerics + single hyphens)",
+            err=True,
+        )
+        raise typer.Exit(1)
 
 
 def _short(text: str, n: int = 60) -> str:
@@ -60,6 +72,8 @@ def materialize(
     host: str = typer.Option("claude", "--host", help="target host: claude | codex | all"),
 ) -> None:
     """Distribute active skill(s) to a host skills dir — Claude Code and/or Codex (FR-PUB-2)."""
+    if skill_id:
+        _require_valid_name(skill_id)
     reg = _registry()
     try:
         hosts = config.resolve_hosts(host)
@@ -76,7 +90,7 @@ def materialize(
     for sid in ids:
         for h in hosts:
             try:
-                dest = reg.materialize(sid, config.host_skills_dir(h))
+                dest = reg.materialize(sid, config.host_skills_dir(h), host_name=h)
                 typer.echo(f"{sid} -> {h}: {dest}")
             except RegistryError as e:
                 typer.echo(f"{sid} -> {h}: {e}", err=True)
@@ -142,6 +156,26 @@ def mine(min_sessions: int = typer.Option(3, "--min-sessions")) -> None:
 
 
 @app.command()
+def prune(
+    days: int = typer.Option(
+        14, "--days", envvar="SUPER_SKILL_EVENT_TTL",
+        help="Keep events within N days; older event days are pruned (FR-CAP-6).",
+    ),
+    apply: bool = typer.Option(
+        False, "--apply", help="Actually delete. Default is a dry-run that only reports.",
+    ),
+) -> None:
+    """Prune captured event days older than the TTL (default 14 days; dry-run)."""
+    log = EventLog()
+    pruned = log.prune(days=days, apply=apply)
+    if not pruned:
+        typer.echo(f"nothing to prune (all event days within {days} days)")
+        return
+    verb = "pruned" if apply else "would prune (dry-run — pass --apply to delete)"
+    typer.echo(f"{verb} {len(pruned)} day(s): {', '.join(pruned)}")
+
+
+@app.command()
 def status() -> None:
     """Registry summary: location, git head, skill/version/candidate counts."""
     reg = _registry()
@@ -189,6 +223,7 @@ def list_() -> None:
 @app.command()
 def show(skill_id: str) -> None:
     """Show a skill's frontmatter, version history and provenance."""
+    _require_valid_name(skill_id)
     reg = _registry()
     rec = reg.get(skill_id)
     if rec is None:
@@ -209,6 +244,7 @@ def show(skill_id: str) -> None:
 @app.command()
 def explain(skill_id: str) -> None:
     """FR-IF-5: why this skill exists, where it came from, and how to roll it back."""
+    _require_valid_name(skill_id)
     reg = _registry()
     rec = reg.get(skill_id)
     if rec is None:
@@ -225,8 +261,13 @@ def explain(skill_id: str) -> None:
                    f" by {ev.actor}{detail}")
     versions = list(rec.versions)
     active = rec.skill.active_version
-    if active and versions.index(active) > 0:
-        prev = versions[versions.index(active) - 1]
+    if active and active not in versions:
+        typer.echo(
+            f"\n! active pointer {active!r} is dangling — run `super-skill doctor`",
+            err=True,
+        )
+    elif active and rec.versions[active].parent_versions:
+        prev = rec.versions[active].parent_versions[0]  # DAG parent, not insertion-pred (L20)
         typer.echo(f"\nrollback : super-skill rollback {skill_id} --to {prev}")
 
 
@@ -238,6 +279,7 @@ def rollback(
     host: str = typer.Option("claude", "--host", help="re-materialize to: claude | codex | all"),
 ) -> None:
     """Switch the active pointer to an older version and re-materialize to the host(s)."""
+    _require_valid_name(skill_id)
     reg = _registry()
     try:
         hosts = config.resolve_hosts(host)
@@ -250,14 +292,26 @@ def rollback(
         raise typer.Exit(1)
     versions = list(rec.versions)
     if not to:
-        idx = versions.index(rec.skill.active_version) if rec.skill.active_version else 0
-        if idx <= 0:
+        active = rec.skill.active_version
+        if active and active not in versions:
+            typer.echo(
+                f"active pointer {active!r} is dangling — run `super-skill doctor`", err=True
+            )
+            raise typer.Exit(1)
+        # Default target = the DAG parent of the active version, not the version
+        # dict's insertion-order predecessor (they diverge after a rollback+branch, L20).
+        parents = rec.versions[active].parent_versions if active else []
+        if not parents:
             typer.echo("no previous version to roll back to", err=True)
             raise typer.Exit(1)
-        to = versions[idx - 1]
+        to = parents[0]
     try:
-        reg.set_active(skill_id, to, op=OperationType.ROLLBACK, reason=reason or None)
-        dests = [reg.materialize(skill_id, config.host_skills_dir(h)) for h in hosts]
+        rec = reg.set_active(skill_id, to, op=OperationType.ROLLBACK, reason=reason or None)
+        # Re-materialize to every host this skill was pushed to, not just the
+        # requested --host, so a default `rollback` still fixes codex (P2-5).
+        sync_hosts = sorted({*hosts, *rec.skill.materialized_hosts})
+        dests = [reg.materialize(skill_id, config.host_skills_dir(h), host_name=h)
+                 for h in sync_hosts]
     except RegistryError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(1) from e
@@ -373,6 +427,7 @@ def candidate_list() -> None:
 @candidate_app.command("show")
 def candidate_show(candidate_id: str) -> None:
     """Show a candidate's metadata and drafted SKILL.md."""
+    _require_valid_name(candidate_id, "candidate id")
     store = CandidateStore(config.state_root())
     cand = store.get(candidate_id)
     if cand is None:
@@ -407,6 +462,7 @@ def candidate_approve(
     host: str = typer.Option("claude", "--host", help="materialize to: claude | codex | all"),
 ) -> None:
     """Approve a candidate: promote to the registry and materialize to the host(s)."""
+    _require_valid_name(candidate_id, "candidate id")
     store = CandidateStore(config.state_root())
     reg = _registry()
     try:
@@ -416,9 +472,7 @@ def candidate_approve(
         raise typer.Exit(1) from e
     try:
         sv = approve(store, reg, candidate_id, config.host_skills_dir(hosts[0]),
-                     reason=reason or None)
-        for extra in hosts[1:]:
-            reg.materialize(sv.skill_id, config.host_skills_dir(extra))
+                     host_name=hosts[0], reason=reason or None)
     except InstructionGateError as e:
         typer.echo(str(e), err=True)
         for f in e.findings:
@@ -434,6 +488,20 @@ def candidate_approve(
     except (CandidateError, RegistryError, SkillMdError) as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(1) from e
+    # The candidate is now approved + promoted + materialized to hosts[0]. An
+    # extra-host materialize failure must NOT read as an approve failure (re-running
+    # approve would say "already approved") — point at the recovery command (L17).
+    for extra in hosts[1:]:
+        try:
+            reg.materialize(sv.skill_id, config.host_skills_dir(extra), host_name=extra)
+        except RegistryError as e:
+            typer.echo(
+                f"approved {candidate_id} -> {sv.skill_id}@{sv.version}, but materialize to "
+                f"{extra} failed: {e}\n  recover with: "
+                f"super-skill materialize {sv.skill_id} --host {extra}",
+                err=True,
+            )
+            raise typer.Exit(1) from e
     dests = ", ".join(str(config.host_skills_dir(h) / sv.skill_id) for h in hosts)
     typer.echo(
         f"approved {candidate_id} -> {sv.skill_id}@{sv.version}; materialized to {dests}"
@@ -443,6 +511,7 @@ def candidate_approve(
 @candidate_app.command("reject")
 def candidate_reject(candidate_id: str) -> None:
     """Mark a candidate rejected (leaves it on disk for the record)."""
+    _require_valid_name(candidate_id, "candidate id")
     store = CandidateStore(config.state_root())
     try:
         reject(store, candidate_id)

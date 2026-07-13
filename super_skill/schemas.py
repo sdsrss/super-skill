@@ -18,6 +18,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 # agentskills.io spec: name 1-64 chars, lowercase + hyphen, must match dir name.
 NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 
+# Envelope version for on-disk state (meta.json / candidate.json / WAL lines).
+# Bump when a persisted field is added so a newer writer is detectable by an
+# older reader; the persisted models use extra="ignore" so an older reader
+# tolerates (drops) fields a newer writer added rather than dying "corrupt"
+# (audit N3 / P3-4).
+SCHEMA_VERSION = 1
+
 
 def utcnow() -> datetime:
     """Timezone-aware now(). Centralized so tests can monkeypatch one symbol."""
@@ -86,7 +93,8 @@ class EventType(StrEnum):
 class RedactionMark(BaseModel):
     """What was redacted and where — never the value (docs/01 FR-CAP-2)."""
 
-    model_config = ConfigDict(extra="forbid")
+    # extra="ignore": forward-tolerant read of persisted state (audit N3 / P3-4).
+    model_config = ConfigDict(extra="ignore")
 
     kind: str
     location: str = Field(description="dotted path of the field the secret was found in")
@@ -97,8 +105,10 @@ class CaptureEvent(BaseModel):
     """One redacted host event appended to the JSONL WAL. WS keeps only observable
     actions + short outcomes — never hidden chain-of-thought (FR-CAP-7)."""
 
-    model_config = ConfigDict(extra="forbid")
+    # extra="ignore": forward-tolerant read of persisted WAL lines (audit N3 / P3-4).
+    model_config = ConfigDict(extra="ignore")
 
+    schema_version: int = SCHEMA_VERSION
     event_id: str
     session_id: str
     event_type: EventType
@@ -112,7 +122,7 @@ class CaptureEvent(BaseModel):
 class Provenance(BaseModel):
     """Where a version's content came from and under what license."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")  # forward-tolerant read (P3-4)
 
     kind: ProvenanceKind
     origin: str = Field(description="path, session id, or source URL")
@@ -146,7 +156,7 @@ class SkillFrontmatter(BaseModel):
 class SkillVersion(BaseModel):
     """One immutable node in a skill's version DAG."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")  # forward-tolerant read (P3-4)
 
     skill_id: str
     version: str
@@ -163,12 +173,16 @@ class Skill(BaseModel):
     """Skill-level state: the active-version pointer that rollback switches,
     distinct from the SkillVersion DAG nodes (docs/02 §5.1, review H4)."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")  # forward-tolerant read (P3-4)
 
     skill_id: str
     scope: Scope = Scope.GLOBAL
     active_version: str | None = None
     user_disabled: bool = False
+    # Hosts this skill has been distributed to (docs/02 §5.1 Skill, WS-operational
+    # extension). rollback/doctor iterate this so every materialized host is
+    # re-synced/verified, not just the default claude one (audit P2-6 / P2-5).
+    materialized_hosts: list[str] = Field(default_factory=list)
 
 
 class OperationRecord(BaseModel):
@@ -195,7 +209,7 @@ class AuditEvent(BaseModel):
     """Immutable audit trail entry. In WS these are reconstructable from git
     history; kept structured so `explain` renders a uniform provenance chain."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")  # forward-tolerant read (P3-4)
 
     skill_id: str
     op: OperationType

@@ -75,7 +75,7 @@ def seed_from_host(reg: Registry, host_dir: Path) -> SeedReport:
         )
         (report.updated if existing else report.imported).append(skill_id)
 
-    reg._commit(
+    reg.commit(
         f"seed: import {len(report.imported)} new / {len(report.updated)} updated from host"
     )
     return report

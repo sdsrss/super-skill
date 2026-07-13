@@ -33,6 +33,46 @@ def test_github_and_aws_tokens():
     assert "github_token" in counts and "aws_key" in counts
 
 
+_JWT = "eyJhbGciOiJIUzI1NiJ9" + "." + "eyJzdWIiOiJ0ZXN0In0" + "." + "fakeSig0123456789"
+
+
+def test_jwt_redacted():
+    """P2-3 / audit P2-4: a bare JWT (no Bearer prefix) was unmatched — the three
+    dot-joined base64url segments must redact."""
+    red, counts = redact_text(f"session token is {_JWT} now")
+    assert "eyJhbGci" not in red
+    assert counts.get("jwt") == 1
+
+
+def test_url_basic_auth_redacted():
+    """P2-3 / audit P2-4: credentials embedded in a URL (user:pass@host) must
+    redact while the host is preserved."""
+    pw = "s3cr3t" + "passw0rd"
+    red, counts = redact_text(f"clone https://alice:{pw}@github.com/x.git")
+    assert pw not in red
+    assert counts.get("basic_auth") == 1
+    assert "github.com" in red  # host preserved, only creds dropped
+
+
+def test_large_string_leaf_truncated():
+    """P2-7 / audit P2-8: a huge string leaf (e.g. a 10MB tool output) is truncated
+    so the WAL line stays bounded and the redaction regexes don't run over
+    megabytes on the hook hot path."""
+    big = "x" * (300 * 1024)
+    red, marks = redact_payload({"stdout": big})
+    assert len(red["stdout"]) < len(big)
+    assert any(m.kind == "truncated" for m in marks)
+
+
+def test_truncation_runs_after_redaction():
+    """A secret in an over-long leaf is still redacted — redact runs before the
+    length cut, so truncation can't split a secret mid-token."""
+    payload = {"log": "sk-ant-" + "A" * 30 + (" filler" * 100000)}
+    red, marks = redact_payload(payload)
+    assert "sk-ant-AAAA" not in red["log"]
+    assert any(m.kind == "anthropic_key" for m in marks)
+
+
 def test_assigned_secret_keeps_key_drops_value():
     red, counts = redact_text('password="hunter2secret"')
     assert "hunter2secret" not in red
