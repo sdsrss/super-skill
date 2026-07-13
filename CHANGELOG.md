@@ -3,6 +3,26 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic versioning.
 
+## [0.12.0] - 2026-07-13
+
+Proactive mine-backlog reminder. Backward-compatible (additive command +
+additive hooks-config entry).
+
+### Added
+- **`super-skill status-reminder`** — SessionStart hook helper. When the
+  unmined-sessions backlog crosses the nudge threshold it prints a JSON
+  `hookSpecificOutput` envelope whose injected context makes the session's
+  assistant proactively tell the user about the backlog, show the
+  `super-skill mine` command, and offer a yes/no to run it on their behalf;
+  otherwise it prints nothing. Exit code is always 0 and internal errors are
+  swallowed — a hook helper must never fail the host session (NFR-3).
+- **`hooks-config` wires the reminder automatically**: the generated
+  SessionStart block gains a second entry (matcher `"startup"`) invoking the
+  sibling `status-reminder` command, derived from the same command prefix as
+  `capture` (custom prefixes follow along).
+
+Tests 181 → 186; `ruff check` / `mypy --strict` clean.
+
 ## [0.11.2] - 2026-07-12
 
 Mining signal-to-noise fix. Backward-compatible.
