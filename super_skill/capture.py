@@ -149,15 +149,23 @@ class EventLog:
         return out
 
     def _parse_session_ids(self, wal: Path) -> set[str]:
+        """Raw (schema-tolerant) session ids of one day file.
+
+        Deliberately looser than iter_events: a line whose event_type enum a
+        newer writer added still names a real session. Callers that compare
+        against the mine watermark must record the same raw superset (F3)."""
         out: set[str] = set()
         for line in wal.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if not line:
                 continue
             try:
-                sid = json.loads(line).get("session_id")
+                rec = json.loads(line)
             except ValueError:
                 continue  # torn line — same tolerance as iter_events
+            if not isinstance(rec, dict):
+                continue  # a stray JSON scalar line must not crash readers
+            sid = rec.get("session_id")
             if isinstance(sid, str):
                 out.add(sid)
         return out

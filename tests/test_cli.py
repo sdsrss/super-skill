@@ -827,7 +827,6 @@ def test_candidate_show_missing_skill_md_clean_error(env):
     (victim / "SKILL.md").unlink()
     r = runner.invoke(app, ["candidate", "show", victim.name])
     assert r.exit_code == 1
-    assert r.exception is None or not isinstance(r.exception, Exception) or True
     assert "no SKILL.md" in r.output
 
 
@@ -929,3 +928,80 @@ def test_doctor_dangling_pointer_suggests_rollback_to(env):
     r = runner.invoke(app, ["doctor"])
     assert r.exit_code == 1
     assert "rollback alpha --to" in r.output and "v1" in r.output
+
+
+def test_unknown_event_type_sessions_still_clear_reminder(env, monkeypatch):
+    """Review F3: the hook counts RAW session ids while mine's watermark used
+    the Pydantic-validated view — a session written by a newer build (unknown
+    event_type enum) became an un-clearable perpetual reminder. A stray JSON
+    scalar line must not crash any reader either."""
+    from pathlib import Path
+
+    from super_skill import config
+    from super_skill.capture import EventLog
+    from super_skill.hooks import status_reminder_json
+
+    monkeypatch.setenv("SUPER_SKILL_MINE_REMINDER", "2")
+    log = EventLog()
+    from super_skill.schemas import EventType
+
+    log.append(EventType.USER_PROMPT_SUBMIT, "known", {"text": "hello"})
+    wal = next(iter(log.events_dir.glob("*/events.jsonl")))
+    with wal.open("a", encoding="utf-8") as f:
+        f.write('{"schema_version":1,"event_id":"x1","session_id":"future-1",'
+                '"event_type":"SubagentStop","timestamp":"2026-07-13T00:00:00Z",'
+                '"payload":{},"redactions":[],"consent_scope":"default"}\n')
+        f.write("42\n")  # stray scalar line
+    root = Path(config.state_root())
+    assert status_reminder_json(root) is not None  # 2 raw sessions >= 2
+    r = runner.invoke(app, ["mine"])
+    assert r.exit_code == 0, r.output
+    assert status_reminder_json(root) is None  # watermark acknowledged raw ids
+
+
+def test_hooks_config_trailing_space_normalized(env):
+    """Review F4: a trailing space passed validation yet broke removesuffix,
+    still generating a status-reminder hook that exits 2."""
+    import json
+
+    r = runner.invoke(app, ["hooks-config", "--command", "uv run super-skill capture "])
+    assert r.exit_code == 0, r.output
+    block = json.loads(r.stdout)
+    cmds = [
+        h["command"]
+        for entries in block["hooks"].values()
+        for e in entries
+        for h in e["hooks"]
+    ]
+    assert "uv run super-skill status-reminder" in cmds
+    assert not any("capture  status-reminder" in c for c in cmds)
+
+
+def test_mine_top_zero_is_a_peek(env):
+    """Review F6: --top 0 shows nothing, so it must not clear the backlog."""
+    from super_skill import config, minestate
+
+    _capture_family("nu top zero", 3)
+    r = runner.invoke(app, ["mine", "--top", "0"])
+    assert r.exit_code == 0, r.output
+    assert minestate.mined_sessions(config.state_root()) == set()
+
+
+def test_seed_foreign_git_refusal_is_clean(env, monkeypatch, tmp_path):
+    """Review F5: the P0-1 refusal surfaced as a rich traceback from seed."""
+    import subprocess
+
+    repo = tmp_path / "workrepo"
+    repo.mkdir()
+    subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
+    (repo / "f.txt").write_text("x", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.email=u@x", "-c", "user.name=u",
+         "commit", "-qm", "user work"], check=True,
+    )
+    monkeypatch.setenv("SUPER_SKILL_HOME", str(repo))
+    r = runner.invoke(app, ["seed"])
+    assert r.exit_code == 1
+    assert r.exception is None or isinstance(r.exception, SystemExit)
+    assert "refusing to adopt" in r.output

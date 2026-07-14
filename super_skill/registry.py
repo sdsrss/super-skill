@@ -39,9 +39,19 @@ from .skillmd import content_hash, parse
 _GIT_ID = ["-c", "user.name=super-skill", "-c", "user.email=super-skill@localhost"]
 
 # Untracked by the registry git backend: pre-promotion scratch (candidates/,
-# locks/), the capture WAL + mine watermark (events/, mine_state.json — private
-# session content that must not enter audit history, M9), and atomic-write temps.
-_GITIGNORE = "locks/\ncandidates/\nevents/\nmine_state.json\n*.tmp\n"
+# locks/), the capture WAL + mine watermark + session-id cache (events/,
+# mine_state.json, session_index.json — private session content that must not
+# enter audit history, M9 / review F1), and atomic-write temps. init rewrites a
+# stale .gitignore, so adding a line here self-heals existing registries.
+_GITIGNORE = "locks/\ncandidates/\nevents/\nmine_state.json\nsession_index.json\n*.tmp\n"
+
+# Everything super-skill itself may have placed in a state root. Used by the
+# unborn-HEAD adoption check: any other entry means the directory is someone's
+# working tree, not our state (review F2).
+_OWN_ENTRIES = {
+    ".git", ".gitignore", "registry", "locks", "events", "candidates",
+    "mine_state.json", "session_index.json",
+}
 
 
 class SkillRecord(BaseModel):
@@ -143,7 +153,16 @@ class Registry:
         try:
             roots = self._git("rev-list", "--max-parents=0", "HEAD")
         except RegistryError:
-            return True  # unborn HEAD: fresh `git init`, nothing to clobber
+            # Unborn HEAD: fresh `git init`, but the WORKING TREE can still be
+            # someone's un-committed directory — init would overwrite their
+            # .gitignore (unrecoverable: never committed) and `git add -A`
+            # their files (review F2). Adopt only when the tree holds nothing
+            # but our own state and any .gitignore is already ours.
+            foreign = [p.name for p in self.root.iterdir() if p.name not in _OWN_ENTRIES]
+            if foreign:
+                return False
+            gi = self.root / ".gitignore"
+            return not gi.exists() or gi.read_text(encoding="utf-8") == _GITIGNORE
         for commit in roots.splitlines():
             subject = self._git("log", "-1", "--format=%s", commit.strip())
             if subject.startswith("chore: initialize super-skill registry"):

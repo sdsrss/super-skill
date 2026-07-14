@@ -21,14 +21,24 @@ All notable changes to this project are documented here. Format follows
   skill with a warning instead of dying on a pydantic traceback. Corrupt
   `candidate.json` files are likewise report-and-skip everywhere (candidates
   are git-ignored, so there is nothing to restore).
+- `mine` now ends with an `events on disk:` footer (stderr) reporting the raw-event
+  WAL footprint and, when event days have aged past the FR-CAP-6 TTL, a one-line
+  `super-skill prune --apply` reclaim hint — so the WAL's growth is visible at the
+  moment the user is already looking at captured data. The `/super-skill:mine`
+  plugin command offers to run the prune on the user's behalf when the footer
+  flags prunable days. Deletion itself remains explicit and human-confirmed;
+  nothing is auto-pruned.
 
 ### Changed
 - The SessionStart reminder hook no longer re-parses the entire event WAL at
-  every session opening: past-day session ids come from a size-keyed sidecar
-  (`session_index.json`), cutting the hook's WAL cost from ~0.35s at 46MB
-  (and ~1.5s at a full 14-day TTL, where it would start hitting the 10s hook
-  timeout and silently self-disable) to a single today-file parse. `status`
-  computes its event/session counts in one WAL pass instead of two.
+  every session opening: per-day session ids come from a size-keyed sidecar
+  (`session_index.json`, git-ignored by the registry), cutting the hook's WAL
+  cost from ~0.35s at 46MB (and ~1.5s at a full 14-day TTL, where it would
+  start hitting the 10s hook timeout and silently self-disable) to parsing
+  only changed day files. The reminder, the `status` unmined count, and the
+  mine watermark all use the same raw session-id set, so a session written by
+  a newer build (unknown event type) can no longer become an un-clearable
+  reminder.
 - `candidate reject` on an already-approved candidate now refuses with the
   real retirement path (`rollback`) instead of reporting "rejected" while the
   promoted skill stayed live; `rollback --to <current>` is a no-op instead of
@@ -57,15 +67,6 @@ All notable changes to this project are documented here. Format follows
   false "nothing mined" message, and two labels that collapse onto the same
   slug get disambiguated with a hash suffix instead of the later one being
   swallowed — mined Chinese sessions can now actually become candidates.
-
-### Added
-- `mine` now ends with an `events on disk:` footer (stderr) reporting the raw-event
-  WAL footprint and, when event days have aged past the FR-CAP-6 TTL, a one-line
-  `super-skill prune --apply` reclaim hint — so the WAL's growth is visible at the
-  moment the user is already looking at captured data. The `/super-skill:mine`
-  plugin command offers to run the prune on the user's behalf when the footer
-  flags prunable days. Deletion itself remains explicit and human-confirmed;
-  nothing is auto-pruned.
 
 ### Fixed
 - TTL hardening (review round on the footer change): an unparseable

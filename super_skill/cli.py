@@ -68,7 +68,13 @@ def seed(host: str = typer.Option("claude", "--host", help="source host: claude 
         # all-zero output from a typo'd dir is indistinguishable from an empty
         # host (audit P3-16) — say which path was looked at.
         typer.echo(f"warning: host skills dir does not exist: {src}", err=True)
-    report = seed_from_host(reg, src)
+    try:
+        report = seed_from_host(reg, src)
+    except RegistryError as e:
+        # e.g. the foreign-git-adoption refusal (audit P0-1) — a guard message,
+        # not a crash: no raw traceback (M12).
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1) from e
     typer.echo(
         f"seed: {len(report.imported)} imported, {len(report.updated)} updated, "
         f"{len(report.unchanged)} unchanged, {len(report.skipped)} skipped "
@@ -157,13 +163,18 @@ def mine(
 ) -> None:
     """Surface recurring task families from captured events (FR-GEN-1 signal)."""
     log = EventLog()
-    session_ids = log.session_ids()
+    # Raw superset, not the Pydantic-validated view: the SessionStart hook
+    # counts raw ids, so the watermark must acknowledge the same set or a
+    # session whose event_type this build doesn't know becomes an un-clearable
+    # reminder (review F3).
+    session_ids = log.session_ids_cached()
     families = mine_families(log.iter_events(), min_sessions=min_sessions)
     # Acknowledge BEFORE printing: `mine | head` dies of SIGPIPE mid-listing,
     # and the watermark write must survive the broken pipe (D#67). But only a
-    # default-or-looser filter counts as reviewing the backlog — a stricter
-    # --min-sessions is a peek and must not clear the reminder (audit B-2).
-    if min_sessions <= DEFAULT_MIN_SESSIONS:
+    # default-or-looser filter with a non-empty listing counts as reviewing
+    # the backlog — a stricter --min-sessions or --top 0 is a peek and must
+    # not clear the reminder (audit B-2, review F6).
+    if min_sessions <= DEFAULT_MIN_SESSIONS and (show_all or top > 0):
         minestate.record_mined(log.root, session_ids)
     if not families:
         typer.echo(
@@ -287,11 +298,14 @@ def status() -> None:
     typer.echo(f"skills     : {len(records)} ({active} active)")
     typer.echo(f"versions   : {versions}")
     log = EventLog(reg.root)
-    n_events, sessions = log.scan_stats()  # one WAL pass, not two
+    n_events = log.count()
     typer.echo(f"events     : {n_events}")
     typer.echo(f"capture    : {_capture_liveness(log)}")
     typer.echo(f"candidates : {len(cands)} ({breakdown})")
-    unmined = minestate.unmined(reg.root, sessions)
+    # Same raw id set the hook and the mine watermark use (review F3) — the
+    # validated view undercounts sessions with unknown event types and the two
+    # surfaces would disagree.
+    unmined = minestate.unmined(reg.root, log.session_ids_cached())
     if minestate.reminder_due(unmined):
         typer.echo(f"reminder   : {unmined} distinct sessions unmined "
                    f"— run `super-skill mine`")
@@ -525,7 +539,11 @@ def hooks_config(
 
     Prints only — merge it into ~/.claude/settings.json yourself (editing
     user-global config is your call, not the tool's)."""
-    if not command.rstrip().endswith(" capture") and command.strip() != "super-skill capture":
+    # Normalize BEFORE validating: a trailing space used to pass the check yet
+    # defeat removesuffix(" capture") downstream, generating a broken
+    # status-reminder hook anyway (review F4).
+    command = command.rstrip()
+    if not command.endswith(" capture"):
         # removesuffix(" capture") silently no-ops for a command with trailing
         # args, generating a status-reminder hook that exits 2 (audit P2-12).
         typer.echo(
@@ -563,7 +581,7 @@ def candidate_draft(
     # when something was actually drafted from a default-or-looser view; a
     # 0-draft run or a stricter filter must not clear the backlog (audit B-2).
     if created and min_sessions <= DEFAULT_MIN_SESSIONS:
-        minestate.record_mined(log.root, log.session_ids())
+        minestate.record_mined(log.root, log.session_ids_cached())  # raw set, same as the hook (F3)
     if len(families) > len(picked):
         typer.echo(
             f"{len(families) - len(picked)} lower-recurrence family(ies) "

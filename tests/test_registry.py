@@ -284,3 +284,38 @@ def test_init_adopts_own_registry_history(tmp_path):
     reg = Registry(root=tmp_path / "state")
     reg.init()
     reg.init()  # second run must not raise
+
+
+def test_gitignore_excludes_session_index(tmp_path):
+    """Review F1: session_index.json (session-id cache) lives in the registry
+    git root — without a .gitignore line, the next `git add -A` commit would
+    put every session id into permanent audit history, outliving the WAL TTL."""
+    from super_skill.registry import _GITIGNORE, Registry
+
+    assert "session_index.json" in _GITIGNORE
+    reg = Registry(root=tmp_path / "state")
+    reg.init()
+    (tmp_path / "state" / "session_index.json").write_text("{}", encoding="utf-8")
+    reg.commit("test write")
+    assert "session_index.json" not in reg.git("ls-files")
+
+
+def test_init_refuses_unborn_git_with_foreign_files(tmp_path):
+    """Review F2: a `git init`-ed but zero-commit directory is still someone's
+    working tree — adopting it overwrote their (never-committed, unrecoverable)
+    .gitignore and committed their files."""
+    import subprocess
+
+    import pytest as _pytest
+
+    from super_skill.registry import Registry, RegistryError
+
+    repo = tmp_path / "user-repo"
+    repo.mkdir()
+    subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
+    (repo / "private.txt").write_text("mine", encoding="utf-8")
+    (repo / ".gitignore").write_text("# user rules\n", encoding="utf-8")
+    with _pytest.raises(RegistryError, match="refusing to adopt"):
+        Registry(root=repo).init()
+    assert (repo / ".gitignore").read_text(encoding="utf-8") == "# user rules\n"
+    assert (repo / "private.txt").exists()
