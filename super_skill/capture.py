@@ -8,11 +8,14 @@ elsewhere.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
+import tempfile
+import time
 import uuid
-from collections.abc import Iterator
-from datetime import datetime, timedelta
+from collections.abc import Iterable, Iterator
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -20,6 +23,18 @@ from pydantic import ValidationError
 from . import config
 from .redact import redact_payload, redact_text
 from .schemas import CaptureEvent, EventType, utcnow
+
+# FR-CAP-6 raw-event TTL. Single source of truth for `prune` and the post-mine
+# footer; both honor the SUPER_SKILL_EVENT_TTL env override.
+DEFAULT_EVENT_TTL_DAYS = 14
+
+
+def _parse_day(name: str) -> date | None:
+    """A WAL day dir is strictly YYYY-MM-DD; anything else is not a day."""
+    try:
+        return datetime.strptime(name, "%Y-%m-%d").date()
+    except ValueError:
+        return None
 
 
 class EventLog:
@@ -98,8 +113,129 @@ class EventLog:
     def session_ids(self) -> set[str]:
         return {ev.session_id for ev in self.iter_events()}
 
+    def scan_stats(self) -> tuple[int, set[str]]:
+        """One pass over the WAL: (event_count, distinct session ids).
+
+        `status` used to pay two full scans (count + session_ids)."""
+        n = 0
+        sessions: set[str] = set()
+        for ev in self.iter_events():
+            n += 1
+            sessions.add(ev.session_id)
+        return n, sessions
+
+    def last_event_age_seconds(self) -> float | None:
+        """Seconds since the newest events.jsonl was written, or None when the
+        WAL is empty. mtime-based (O(day dirs)) — capture-liveness signal for
+        `status`; a silently-dead hook chain is otherwise invisible (audit B-1)."""
+        latest: float | None = None
+        if not self.events_dir.exists():
+            return None
+        for wal in self.events_dir.glob("*/events.jsonl"):
+            mtime = wal.stat().st_mtime
+            if latest is None or mtime > latest:
+                latest = mtime
+        if latest is None:
+            return None
+        return max(0.0, time.time() - latest)
+
+    def session_ids_for_days(self, days: Iterable[str]) -> set[str]:
+        """Distinct session ids appearing in the given day dirs only."""
+        out: set[str] = set()
+        for day in days:
+            wal = self.events_dir / day / "events.jsonl"
+            if wal.exists():
+                out |= self._parse_session_ids(wal)
+        return out
+
+    def _parse_session_ids(self, wal: Path) -> set[str]:
+        """Raw (schema-tolerant) session ids of one day file.
+
+        Deliberately looser than iter_events: a line whose event_type enum a
+        newer writer added still names a real session. Callers that compare
+        against the mine watermark must record the same raw superset (F3)."""
+        out: set[str] = set()
+        for line in wal.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue  # torn line — same tolerance as iter_events
+            if not isinstance(rec, dict):
+                continue  # a stray JSON scalar line must not crash readers
+            sid = rec.get("session_id")
+            if isinstance(sid, str):
+                out.add(sid)
+        return out
+
+    def session_ids_cached(self) -> set[str]:
+        """session_ids() with a size-keyed per-day sidecar cache.
+
+        The SessionStart reminder hook used to re-parse (and Pydantic-validate)
+        the entire WAL at every session opening — ~1.5s wall at a full 14-day
+        TTL (audit B-3). Day files are append-only, so a day whose events.jsonl
+        size is unchanged reuses its cached ids; anything else is re-parsed and
+        the cache refreshed. Best-effort: a corrupt/missing cache degrades to a
+        full parse, and cache write failures are swallowed."""
+        cache_path = self.root / "session_index.json"
+        try:
+            cache = json.loads(cache_path.read_text(encoding="utf-8"))
+            days_cache = cache["days"] if isinstance(cache.get("days"), dict) else {}
+        except (OSError, ValueError):
+            days_cache = {}
+        out: set[str] = set()
+        fresh: dict[str, dict[str, object]] = {}
+        if self.events_dir.exists():
+            for day in sorted(self.events_dir.iterdir()):
+                wal = day / "events.jsonl"
+                if not wal.exists():
+                    continue
+                size = wal.stat().st_size
+                cached = days_cache.get(day.name)
+                if (
+                    isinstance(cached, dict)
+                    and cached.get("size") == size
+                    and isinstance(cached.get("sessions"), list)
+                ):
+                    ids = {s for s in cached["sessions"] if isinstance(s, str)}
+                else:
+                    ids = self._parse_session_ids(wal)
+                fresh[day.name] = {"size": size, "sessions": sorted(ids)}
+                out |= ids
+        try:
+            fd, tmp = tempfile.mkstemp(dir=self.root, suffix=".tmp")
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump({"days": fresh}, f)
+            os.chmod(tmp, 0o600)  # session ids are session-derived state (P2-1)
+            os.replace(tmp, cache_path)
+        except OSError:
+            pass  # cache is an optimization, never a failure source
+        return out
+
     def distinct_sessions(self) -> int:
         return len(self.session_ids())
+
+    def disk_usage(self) -> tuple[int, int]:
+        """Return (total_bytes, day_dir_count) of the on-disk WAL — read-only.
+
+        Sums every file under events/ (not just events.jsonl) so the number
+        matches what the user would see with ``du``. Only date-named dirs count
+        as days — the same definition ``prune`` uses — so the footer never
+        reports days that can't be reclaimed."""
+        if not self.events_dir.exists():
+            return (0, 0)
+        total = 0
+        days = 0
+        for entry in sorted(self.events_dir.iterdir()):
+            if entry.is_dir():
+                if _parse_day(entry.name) is not None:
+                    days += 1
+                total += sum(f.stat().st_size for f in entry.rglob("*") if f.is_file())
+            elif entry.is_file():
+                total += entry.stat().st_size
+        return (total, days)
 
     def prune(
         self, *, days: int, now: datetime | None = None, apply: bool = False
@@ -112,14 +248,21 @@ class EventLog:
         deletion is destructive (§8 SAFETY)."""
         if not self.events_dir.exists():
             return []
-        cutoff = (now or utcnow()).date() - timedelta(days=days)
+        # Negative days would put the cutoff in the future and delete today's
+        # fresh events — clamp to 0 ("keep only today").
+        days = max(days, 0)
+        try:
+            cutoff = (now or utcnow()).date() - timedelta(days=days)
+        except OverflowError:
+            # A TTL larger than representable time (e.g. SUPER_SKILL_EVENT_TTL=1000000)
+            # means nothing can be stale — not a crash.
+            return []
         pruned: list[str] = []
         for day in sorted(self.events_dir.iterdir()):
             if not day.is_dir():
                 continue
-            try:
-                d = datetime.strptime(day.name, "%Y-%m-%d").date()
-            except ValueError:
+            d = _parse_day(day.name)
+            if d is None:
                 continue  # not a date-named dir — never prune
             if d < cutoff:
                 pruned.append(day.name)

@@ -3,6 +3,81 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic versioning.
 
+## [Unreleased]
+
+### Added
+- Capture liveness in `status`: a `capture : last event <age>` line, with an
+  explicit warning past 24h — a silently-dead hook chain (CLI off PATH, broken
+  settings merge, unwritable state dir) was previously indistinguishable from
+  "haven't coded much lately". An empty WAL points at `hooks-config`.
+- `prune` (dry-run and `--apply`) now warns when the prunable days contain
+  sessions that were never mined — deleting them silently made the backlog
+  age out unreviewably.
+- `candidate show` prints the draft file path and a `placeholder:` verdict
+  mirroring the approve-time template check (show used to read as approvable
+  while approve still blocked); `candidate draft` prints the path to edit.
+- `doctor` now reports a corrupt `meta.json` as a `meta_corrupt` issue and
+  `doctor --fix` restores it from git HEAD; `status`/`list` skip the corrupt
+  skill with a warning instead of dying on a pydantic traceback. Corrupt
+  `candidate.json` files are likewise report-and-skip everywhere (candidates
+  are git-ignored, so there is nothing to restore).
+- `mine` now ends with an `events on disk:` footer (stderr) reporting the raw-event
+  WAL footprint and, when event days have aged past the FR-CAP-6 TTL, a one-line
+  `super-skill prune --apply` reclaim hint — so the WAL's growth is visible at the
+  moment the user is already looking at captured data. The `/super-skill:mine`
+  plugin command offers to run the prune on the user's behalf when the footer
+  flags prunable days. Deletion itself remains explicit and human-confirmed;
+  nothing is auto-pruned.
+
+### Changed
+- The SessionStart reminder hook no longer re-parses the entire event WAL at
+  every session opening: per-day session ids come from a size-keyed sidecar
+  (`session_index.json`, git-ignored by the registry), cutting the hook's WAL
+  cost from ~0.35s at 46MB (and ~1.5s at a full 14-day TTL, where it would
+  start hitting the 10s hook timeout and silently self-disable) to parsing
+  only changed day files. The reminder, the `status` unmined count, and the
+  mine watermark all use the same raw session-id set, so a session written by
+  a newer build (unknown event type) can no longer become an un-clearable
+  reminder.
+- `candidate reject` on an already-approved candidate now refuses with the
+  real retirement path (`rollback`) instead of reporting "rejected" while the
+  promoted skill stayed live; `rollback --to <current>` is a no-op instead of
+  recording a spurious vN→vN audit entry; `doctor`'s dangling-pointer message
+  names the existing versions and the exact `rollback --to` fix; `seed` warns
+  when the host skills dir does not exist; `hooks-config` rejects a
+  `--command` with trailing arguments (it used to emit a status-reminder hook
+  that exits 2) and its merge note warns about double-capture when the plugin
+  hooks are already active.
+- Mine-backlog reminder default threshold raised 3 → 20 unmined sessions, and
+  `SUPER_SKILL_MINE_REMINDER=0` now means "reminder off" (previously it fired
+  forever and `mine` could never clear it); invalid/negative values warn and
+  fall back instead of silently defaulting. At threshold 3 a heavy
+  multi-session user was nudged at nearly every session opening.
+- `mine` and `candidate draft` now cap output at the top 20 families by
+  recurrence (`--top N` / `--all` to change); `mine` previously printed every
+  family (73k+ lines on real data) and one `draft` run could create thousands
+  of candidate directories. The hidden/undrafted remainder is reported on
+  stderr.
+- A stricter-than-default `--min-sessions` no longer counts as reviewing the
+  backlog: `mine --min-sessions 999` used to print "no families" yet cleared
+  the entire reminder watermark. `candidate draft` likewise records the
+  watermark only when it actually drafted something.
+- Families whose label slugifies to nothing (pure-Chinese/punctuation) draft
+  under a stable `family-<hash>` id instead of being silently skipped with a
+  false "nothing mined" message, and two labels that collapse onto the same
+  slug get disambiguated with a hash suffix instead of the later one being
+  swallowed — mined Chinese sessions can now actually become candidates.
+
+### Fixed
+- TTL hardening (review round on the footer change): an unparseable
+  `SUPER_SKILL_EVENT_TTL` now warns and falls back to the 14-day default on both
+  the footer and `prune` (previously `prune` exited 2, so the footer could
+  recommend a command that then failed); a negative TTL clamps to 0 instead of
+  computing a future cutoff that would have deleted today's events; a TTL large
+  enough to overflow the date range means "nothing is stale" instead of crashing;
+  and the footer's day count now uses `prune`'s definition of a day (date-named
+  dirs only), so it never reports days that can't be reclaimed.
+
 ## [0.13.0] - 2026-07-13
 
 A hardening release implementing the full v0.12.1 comprehensive-audit roadmap

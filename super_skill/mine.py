@@ -107,8 +107,13 @@ class OpportunityFamily:
     projects: set[str] = field(default_factory=set)
 
 
+# A family must recur across at least this many distinct sessions by default;
+# the CLI treats a stricter user-chosen filter as a peek (no watermark).
+DEFAULT_MIN_SESSIONS = 3
+
+
 def mine_families(
-    events: Iterable[CaptureEvent], *, min_sessions: int = 3
+    events: Iterable[CaptureEvent], *, min_sessions: int = DEFAULT_MIN_SESSIONS
 ) -> list[OpportunityFamily]:
     """Return recurring keyword-bigram families sorted by session recurrence."""
     bg_sessions: dict[str, set[str]] = defaultdict(set)

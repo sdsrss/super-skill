@@ -243,3 +243,79 @@ def test_concurrent_add_version_no_lost_update(reg, monkeypatch):
 
     versions = list(reg.get("s").versions)
     assert versions == ["v1", "v2"], f"lost update: only {versions}"
+
+
+def test_init_refuses_foreign_git_history(tmp_path):
+    """Audit P0-1 defense-in-depth: pointing SUPER_SKILL_HOME at an existing
+    (non-registry) git repo must refuse, not adopt it — init used to overwrite
+    .gitignore and `git add -A` commit the user's uncommitted work."""
+    import subprocess
+
+    from super_skill.registry import Registry, RegistryError
+
+    repo = tmp_path / "user-repo"
+    repo.mkdir()
+    subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
+    (repo / "work.txt").write_text("precious uncommitted work", encoding="utf-8")
+    (repo / ".gitignore").write_text("# user's own ignore rules\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.email=u@x", "-c", "user.name=u",
+         "commit", "-qm", "user work"],
+        check=True,
+    )
+    import pytest as _pytest
+
+    with _pytest.raises(RegistryError, match="refusing to adopt"):
+        Registry(root=repo).init()
+    # nothing was touched: user's .gitignore intact, no registry commit
+    assert (repo / ".gitignore").read_text(encoding="utf-8") == "# user's own ignore rules\n"
+    log = subprocess.run(
+        ["git", "-C", str(repo), "log", "--format=%s"],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    assert "super-skill" not in log
+
+
+def test_init_adopts_own_registry_history(tmp_path):
+    """Re-running init on a registry super-skill itself created stays idempotent."""
+    from super_skill.registry import Registry
+
+    reg = Registry(root=tmp_path / "state")
+    reg.init()
+    reg.init()  # second run must not raise
+
+
+def test_gitignore_excludes_session_index(tmp_path):
+    """Review F1: session_index.json (session-id cache) lives in the registry
+    git root — without a .gitignore line, the next `git add -A` commit would
+    put every session id into permanent audit history, outliving the WAL TTL."""
+    from super_skill.registry import _GITIGNORE, Registry
+
+    assert "session_index.json" in _GITIGNORE
+    reg = Registry(root=tmp_path / "state")
+    reg.init()
+    (tmp_path / "state" / "session_index.json").write_text("{}", encoding="utf-8")
+    reg.commit("test write")
+    assert "session_index.json" not in reg.git("ls-files")
+
+
+def test_init_refuses_unborn_git_with_foreign_files(tmp_path):
+    """Review F2: a `git init`-ed but zero-commit directory is still someone's
+    working tree — adopting it overwrote their (never-committed, unrecoverable)
+    .gitignore and committed their files."""
+    import subprocess
+
+    import pytest as _pytest
+
+    from super_skill.registry import Registry, RegistryError
+
+    repo = tmp_path / "user-repo"
+    repo.mkdir()
+    subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
+    (repo / "private.txt").write_text("mine", encoding="utf-8")
+    (repo / ".gitignore").write_text("# user rules\n", encoding="utf-8")
+    with _pytest.raises(RegistryError, match="refusing to adopt"):
+        Registry(root=repo).init()
+    assert (repo / ".gitignore").read_text(encoding="utf-8") == "# user rules\n"
+    assert (repo / "private.txt").exists()

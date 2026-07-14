@@ -277,3 +277,83 @@ def test_wal_event_stamped_with_schema_version(tmp_path):
         json.dumps(rec) + "\n", encoding="utf-8"
     )
     assert next(iter(log.iter_events())).event_type == EventType.PRE_TOOL_USE
+
+
+def test_disk_usage_reports_bytes_and_days(tmp_path):
+    """Input for the post-mine prune hint: WAL footprint as (bytes, day dirs)."""
+    log = EventLog(root=tmp_path)
+    assert log.disk_usage() == (0, 0)
+    log.append(EventType.USER_PROMPT_SUBMIT, "s1", {"text": "hello disk usage"})
+    total, days = log.disk_usage()
+    assert days == 1
+    assert total > 0
+
+
+def test_prune_negative_days_clamped_keeps_today(tmp_path):
+    """Review finding: a negative TTL must not compute a future cutoff that
+    deletes today's fresh events — negative days clamp to 0 (today survives)."""
+    log = EventLog(root=tmp_path)
+    log.append(EventType.USER_PROMPT_SUBMIT, "s1", {"text": "keep me"})
+    assert log.prune(days=-5, apply=True) == []
+    assert log.count() == 1
+
+
+def test_disk_usage_days_counts_only_date_dirs(tmp_path):
+    """Footer 'day(s)' must match prune's definition of a day: a non-date dir
+    contributes bytes (real disk cost) but is never a reclaimable day."""
+    log = EventLog(root=tmp_path)
+    d = log.events_dir / "not-a-date"
+    d.mkdir(parents=True)
+    (d / "junk.txt").write_text("x" * 100, encoding="utf-8")
+    total, days = log.disk_usage()
+    assert days == 0
+    assert total >= 100
+
+
+def test_scan_stats_single_pass_matches(tmp_path):
+    log = EventLog(root=tmp_path)
+    for sid in ("a", "b"):
+        log.append(EventType.USER_PROMPT_SUBMIT, sid, {"text": f"event {sid}"})
+    log.append(EventType.STOP, "a", {"text": "done"})
+    n, sessions = log.scan_stats()
+    assert n == log.count() == 3
+    assert sessions == log.session_ids() == {"a", "b"}
+
+
+def test_last_event_age_none_when_empty_and_grows_with_mtime(tmp_path):
+    import os
+    import time
+
+    log = EventLog(root=tmp_path)
+    assert log.last_event_age_seconds() is None
+    log.append(EventType.USER_PROMPT_SUBMIT, "s", {"text": "x"})
+    fresh = log.last_event_age_seconds()
+    assert fresh is not None and fresh < 60
+    wal = next(iter(log.events_dir.glob("*/events.jsonl")))
+    two_days = time.time() - 2 * 86400
+    os.utime(wal, (two_days, two_days))
+    aged = log.last_event_age_seconds()
+    assert aged is not None and aged > 86400
+
+
+def test_session_ids_cached_matches_and_reuses_cache(tmp_path):
+    """Audit B-3: the SessionStart hook re-parsed the whole WAL every session.
+    Past-day ids come from a size-keyed sidecar; proof of reuse: swapping a
+    cached day's content for same-length junk doesn't change the answer."""
+    log = EventLog(root=tmp_path)
+    for sid in ("a", "b", "c"):
+        log.append(EventType.USER_PROMPT_SUBMIT, sid, {"text": f"event {sid}"})
+    assert log.session_ids_cached() == {"a", "b", "c"}  # builds the cache
+    wal = next(iter(log.events_dir.glob("*/events.jsonl")))
+    raw = wal.read_bytes()
+    wal.write_bytes(b"#" * len(raw))  # same size, unparseable content
+    assert log.session_ids_cached() == {"a", "b", "c"}  # cache hit, no re-parse
+    assert log.session_ids() == set()  # ground truth: the file is junk now
+
+
+def test_session_ids_for_days(tmp_path):
+    log = EventLog(root=tmp_path)
+    log.append(EventType.USER_PROMPT_SUBMIT, "s1", {"text": "x"})
+    day = next(iter(log.events_dir.iterdir())).name
+    assert log.session_ids_for_days([day]) == {"s1"}
+    assert log.session_ids_for_days(["1999-01-01"]) == set()

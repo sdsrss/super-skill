@@ -65,8 +65,11 @@ def status_reminder_json(root: Path) -> str | None:
     injected prose carries explicit not-user-input framing plus a continue
     instruction so the model relays it without derailing the user's task."""
     log = EventLog(root)
-    n = minestate.unmined(root, log.session_ids())
-    if n < minestate.reminder_threshold():
+    # cached: this runs at EVERY session opening — a full-WAL parse here costs
+    # ~1.5s at a 14-day TTL and silently self-disables past the 10s hook
+    # timeout (audit B-3).
+    n = minestate.unmined(root, log.session_ids_cached())
+    if not minestate.reminder_due(n):
         return None
     text = (
         f"[super-skill plugin] {n} distinct captured coding sessions are "

@@ -6,4 +6,4 @@ Run `super-skill seed` via Bash and report the result.
 
 - If the CLI is not found, tell them to install it: `uv tool install super-skill-cli` (or `pipx install super-skill-cli`).
 - seed is idempotent by content hash and never mutates `~/.claude/skills` — it only brings the current skills under version control (new content becomes a new version).
-- Summarize imported / updated / unchanged / skipped counts. After seeding, suggest `/super-skill:status`, `/super-skill:explain <id>`, or `/super-skill:doctor`.
+- Summarize imported / updated / unchanged / skipped counts. After seeding, suggest `/super-skill:status`, `/super-skill:doctor`, or the CLI `super-skill explain <id>` (there is no explain slash command).

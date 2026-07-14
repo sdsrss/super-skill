@@ -21,6 +21,8 @@ def env(tmp_path, monkeypatch):
     # P4-3: pin the codex target too, so a --host codex|all path can never write
     # to the real ~/.agents/skills. Tests needing it derive `tmp_path / "codex"`.
     monkeypatch.setenv("SUPER_SKILL_CODEX_SKILLS", str(tmp_path / "codex"))
+    # A developer's exported TTL must not leak into footer/prune assertions.
+    monkeypatch.delenv("SUPER_SKILL_EVENT_TTL", raising=False)
     return host
 
 
@@ -208,10 +210,11 @@ def test_status_reminder_silent_when_no_backlog(env):
     assert r.output.strip() == ""
 
 
-def test_status_reminder_emits_envelope_on_backlog(env):
+def test_status_reminder_emits_envelope_on_backlog(env, monkeypatch):
     import json
 
-    _capture_sessions(3)  # default reminder threshold
+    monkeypatch.setenv("SUPER_SKILL_MINE_REMINDER", "3")  # default is now 20
+    _capture_sessions(3)
     r = runner.invoke(app, ["status-reminder"])
     assert r.exit_code == 0
     envelope = json.loads(r.output)
@@ -486,7 +489,8 @@ def test_doctor_fix_cli(env):
     assert "needs manual fix" in r.output
 
 
-def test_mine_reminder_in_status(env):
+def test_mine_reminder_in_status(env, monkeypatch):
+    monkeypatch.setenv("SUPER_SKILL_MINE_REMINDER", "3")  # default is now 20
     import json
 
     for sid in ("s1", "s2", "s3"):
@@ -601,3 +605,403 @@ def test_invalid_candidate_id_rejected(env):
             r = runner.invoke(app, ["candidate", cmd, bad])
             assert r.exit_code == 1
             assert "invalid candidate id" in r.output.lower(), (cmd, r.output)
+
+
+def test_mine_footer_flags_days_beyond_ttl(env):
+    """Post-mine prune hint: a day dir older than the TTL must surface the WAL
+    size and the exact reclaim command, so the WAL never grows silently."""
+    from super_skill.capture import EventLog
+
+    stale = EventLog().events_dir / "2020-01-01"
+    stale.mkdir(parents=True)
+    (stale / "events.jsonl").write_text('{"x":1}\n', encoding="utf-8")
+    r = runner.invoke(app, ["mine"])
+    assert r.exit_code == 0, r.output
+    # spec constraint: footer is stderr-only — the stdout family table stays
+    # machine-readable (mine | head pipelines).
+    assert "events on disk" in r.stderr
+    assert "events on disk" not in r.stdout
+    assert "beyond" in r.stderr
+    assert "prune --apply" in r.stderr
+
+
+def test_mine_footer_all_within_ttl(env):
+    """Fresh-only WAL: footer reports size for awareness but no prune nudge."""
+    from super_skill.capture import EventLog
+    from super_skill.schemas import EventType
+
+    EventLog().append(EventType.USER_PROMPT_SUBMIT, "s1", {"text": "fresh event"})
+    r = runner.invoke(app, ["mine"])
+    assert r.exit_code == 0, r.output
+    assert "events on disk" in r.stderr
+    assert "all within" in r.stderr
+    assert "prune --apply" not in r.stderr
+
+
+def test_mine_footer_absent_on_empty_wal(env):
+    r = runner.invoke(app, ["mine"])
+    assert r.exit_code == 0, r.output
+    assert "events on disk" not in r.output
+
+
+def test_mine_footer_respects_ttl_env(env, monkeypatch):
+    """SUPER_SKILL_EVENT_TTL drives the footer judgment, same as prune."""
+    from super_skill.capture import EventLog
+
+    stale = EventLog().events_dir / "2020-01-01"
+    stale.mkdir(parents=True)
+    (stale / "events.jsonl").write_text('{"x":1}\n', encoding="utf-8")
+    monkeypatch.setenv("SUPER_SKILL_EVENT_TTL", "1000000")
+    r = runner.invoke(app, ["mine"])
+    assert r.exit_code == 0, r.output
+    assert "all within" in r.stderr
+    assert "prune --apply" not in r.stderr
+
+
+def test_mine_footer_and_prune_agree_on_invalid_ttl_env(env, monkeypatch):
+    """Review finding: the footer must never recommend a command that then fails.
+    An unparseable SUPER_SKILL_EVENT_TTL falls back to the default on BOTH the
+    footer and the prune command (with a stderr warning) — previously typer's
+    envvar parsing made `prune` exit 2 while the footer silently used 14."""
+    from super_skill.capture import EventLog
+
+    stale = EventLog().events_dir / "2020-01-01"
+    stale.mkdir(parents=True)
+    (stale / "events.jsonl").write_text('{"x":1}\n', encoding="utf-8")
+    monkeypatch.setenv("SUPER_SKILL_EVENT_TTL", "abc")
+    r = runner.invoke(app, ["mine"])
+    assert r.exit_code == 0, r.output
+    assert "14-day TTL" in r.stderr
+    assert "invalid SUPER_SKILL_EVENT_TTL" in r.stderr
+    r = runner.invoke(app, ["prune"])  # dry-run must work, not exit 2
+    assert r.exit_code == 0, r.output
+    assert "2020-01-01" in r.output
+
+
+def _capture_family(text, sessions):
+    """Seed one keyword family recurring across N distinct sessions."""
+    from super_skill.capture import EventLog
+    from super_skill.schemas import EventType
+
+    log = EventLog()
+    for i in range(sessions):
+        log.append(EventType.USER_PROMPT_SUBMIT, f"s-{text.split()[0]}-{i}", {"text": text})
+
+
+def test_mine_top_caps_output_all_lifts_it(env):
+    """Audit P1-3: mine printed 73k+ lines uncapped. Default --top 20; here
+    --top 1 shows one family and says how many were hidden; --all shows both."""
+    _capture_family("alpha rebuild pipeline", 4)
+    _capture_family("beta rollout checklist", 3)
+    r = runner.invoke(app, ["mine", "--top", "1"])
+    assert r.exit_code == 0, r.output
+    family_rows = [ln for ln in r.stdout.splitlines() if "  " in ln and "family" not in ln]
+    assert len(family_rows) == 1, r.stdout
+    assert "more famil" in r.stderr  # "N more family(ies) — use --all"
+    r = runner.invoke(app, ["mine", "--all"])
+    assert "alpha" in r.stdout.replace("\n", " ") and "beta" in r.stdout.replace("\n", " ")
+
+
+def test_mine_stricter_filter_is_a_peek_not_a_review(env):
+    """Audit B-2: `mine --min-sessions 999` printed 'no families' yet cleared
+    the whole backlog. A stricter-than-default filter must not move the
+    watermark; a default mine afterwards does."""
+    from super_skill import config, minestate
+
+    _capture_family("gamma flaky retry", 3)
+    r = runner.invoke(app, ["mine", "--min-sessions", "999"])
+    assert r.exit_code == 0, r.output
+    assert minestate.mined_sessions(config.state_root()) == set()
+    r = runner.invoke(app, ["mine"])
+    assert r.exit_code == 0, r.output
+    assert len(minestate.mined_sessions(config.state_root())) == 3
+
+
+def test_draft_records_watermark_only_when_it_drafts(env):
+    """Audit B-2: `candidate draft` cleared the reminder backlog even when it
+    created zero candidates."""
+    from super_skill import config, minestate
+
+    r = runner.invoke(app, ["candidate", "draft"])  # empty WAL -> 0 drafted
+    assert r.exit_code == 0, r.output
+    assert minestate.mined_sessions(config.state_root()) == set()
+    _capture_family("delta release notes", 3)
+    r = runner.invoke(app, ["candidate", "draft"])
+    assert "drafted 2 candidate" in r.stdout, r.output  # 2 bigrams from the text
+    assert len(minestate.mined_sessions(config.state_root())) == 3
+
+
+def test_draft_top_caps_and_reports_rest(env):
+    _capture_family("epsilon regression sweep", 4)
+    _capture_family("zeta packaging fix", 3)
+    r = runner.invoke(app, ["candidate", "draft", "--top", "1"])
+    assert r.exit_code == 0, r.output
+    assert "drafted 1 candidate" in r.stdout
+    assert "not drafted" in r.stderr
+
+
+def test_status_reminder_env_zero_disables_nudge(env, monkeypatch):
+    """Audit P2-13: threshold 0 used to nudge forever and mine couldn't clear it."""
+    from pathlib import Path
+
+    from super_skill import config
+    from super_skill.hooks import status_reminder_json
+
+    _capture_family("eta many sessions", 25)
+    monkeypatch.setenv("SUPER_SKILL_MINE_REMINDER", "0")
+    r = runner.invoke(app, ["status"])
+    # the label, not the bare word — tmp_path embeds the test name (…reminder…)
+    assert "reminder   :" not in r.stdout
+    assert status_reminder_json(Path(config.state_root())) is None
+
+
+def test_status_shows_capture_liveness(env, monkeypatch):
+    """Audit B-1: broken capture was indistinguishable from 'not coding much'.
+    status now reports last-event age and warns when it exceeds a day."""
+    import os
+    import time
+
+    r = runner.invoke(app, ["status"])
+    assert "no events captured yet" in r.stdout
+    _capture_sessions(1)
+    r = runner.invoke(app, ["status"])
+    assert "capture    : last event" in r.stdout
+    from super_skill import config
+
+    wal = next(iter((config.state_root() / "events").glob("*/events.jsonl")))
+    old = time.time() - 3 * 86400
+    os.utime(wal, (old, old))
+    r = runner.invoke(app, ["status"])
+    assert "capture may be broken" in r.stdout + r.stderr
+
+
+def test_status_and_list_survive_corrupt_meta(env):
+    """Audit P1-5: a corrupt meta.json crashed status/list/doctor with a rich
+    traceback; doctor --fix restores it from git HEAD."""
+    host = env
+    _make_skill(host, "alpha", "first")
+    _make_skill(host, "beta", "second")
+    runner.invoke(app, ["seed"])
+    from super_skill import config
+
+    meta = config.state_root() / "registry" / "skills" / "alpha" / "meta.json"
+    meta.write_text("{corrupt", encoding="utf-8")
+    r = runner.invoke(app, ["status"])
+    assert r.exit_code == 0, r.output
+    assert "corrupt meta.json" in r.stderr and "doctor" in r.stderr
+    r = runner.invoke(app, ["list"])
+    assert r.exit_code == 0, r.output
+    assert "beta" in r.stdout  # healthy skill still listed
+    r = runner.invoke(app, ["doctor"])
+    assert r.exit_code == 1
+    assert "meta_corrupt" in r.output or "corrupt meta.json" in r.output
+    r = runner.invoke(app, ["doctor", "--fix"])
+    assert r.exit_code == 0, r.output  # restored from git HEAD, re-verified clean
+    r = runner.invoke(app, ["show", "alpha"])
+    assert r.exit_code == 0
+
+
+def test_candidate_surfaces_survive_corrupt_candidate_json(env):
+    """Audit P1-6: candidates/ is git-ignored, so a corrupt candidate.json must
+    be report-and-skip everywhere — nothing can restore it."""
+    _capture_family("theta corrupt json", 3)
+    runner.invoke(app, ["candidate", "draft"])
+    from super_skill import config
+
+    cdir = config.state_root() / "candidates"
+    victim = sorted(d for d in cdir.iterdir() if d.is_dir())[0]
+    (victim / "candidate.json").write_text("{nope", encoding="utf-8")
+    for cmd in (["candidate", "list"], ["status"], ["list"]):
+        r = runner.invoke(app, cmd)
+        assert r.exit_code == 0, (cmd, r.output)
+        assert "corrupt" in r.stderr, (cmd, r.stderr)
+
+
+def test_candidate_show_missing_skill_md_clean_error(env):
+    _capture_family("iota missing md", 3)
+    runner.invoke(app, ["candidate", "draft"])
+    from super_skill import config
+
+    cdir = config.state_root() / "candidates"
+    victim = sorted(d for d in cdir.iterdir() if d.is_dir())[0]
+    (victim / "SKILL.md").unlink()
+    r = runner.invoke(app, ["candidate", "show", victim.name])
+    assert r.exit_code == 1
+    assert "no SKILL.md" in r.output
+
+
+def test_candidate_show_prints_path_and_placeholder_verdict(env):
+    """Audit P2-10/P2-11: show used to read as approvable ('gate: clean',
+    'eval-lite: pass') while approve blocked on the placeholder check show never
+    ran; and nothing ever printed the draft's path to edit."""
+    _capture_family("kappa placeholder check", 3)
+    r = runner.invoke(app, ["candidate", "draft"])
+    cand_id = r.stdout.splitlines()[1].split()[0]
+    r = runner.invoke(app, ["candidate", "show", cand_id])
+    assert r.exit_code == 0, r.output
+    assert "SKILL.md" in r.stdout and "candidates" in r.stdout  # path shown
+    assert "placeholder" in r.stdout and "BLOCKED" in r.stdout
+
+
+def test_reject_approved_candidate_refuses(env):
+    """Audit P1-9: rejecting an already-approved candidate said 'rejected' while
+    the promoted skill stayed active and materialized — a lie."""
+    _capture_family("lambda approved reject", 3)
+    r = runner.invoke(app, ["candidate", "draft"])
+    cand_id = r.stdout.splitlines()[1].split()[0]
+    from super_skill import config
+    from super_skill.candidate import CandidateStore
+
+    store = CandidateStore(config.state_root())
+    md = store.skill_md(cand_id)
+    store.write_skill_md(
+        cand_id, md.replace("TODO: the trigger", "trigger").replace(
+            "TODO: the procedure", "procedure").replace("EDIT before approving", "edited"),
+    )
+    r = runner.invoke(app, ["candidate", "approve", cand_id])
+    assert r.exit_code == 0, r.output
+    r = runner.invoke(app, ["candidate", "reject", cand_id])
+    assert r.exit_code == 1, r.output
+    assert "rollback" in r.output  # points at the real retirement path
+    r = runner.invoke(app, ["candidate", "show", cand_id])
+    assert "approved" in r.stdout  # status not silently flipped
+
+
+def test_prune_warns_about_never_mined_sessions(env):
+    from super_skill.capture import EventLog
+
+    stale = EventLog().events_dir / "2020-01-01"
+    stale.mkdir(parents=True)
+    (stale / "events.jsonl").write_text(
+        '{"schema_version":1,"event_id":"e1","session_id":"ghost","event_type":"UserPromptSubmit",'
+        '"timestamp":"2020-01-01T00:00:00Z","payload":{},"redactions":[],"consent_scope":"default"}\n',
+        encoding="utf-8",
+    )
+    r = runner.invoke(app, ["prune"])
+    assert r.exit_code == 0, r.output
+    assert "never-mined" in r.stderr and "2020-01-01" in r.stdout
+
+
+def test_seed_warns_when_host_dir_missing(env, monkeypatch, tmp_path):
+    monkeypatch.setenv("SUPER_SKILL_HOST_SKILLS", str(tmp_path / "nope"))
+    r = runner.invoke(app, ["seed"])
+    assert r.exit_code == 0, r.output
+    assert "does not exist" in r.stderr
+
+
+def test_list_hint_has_binary_prefix(env):
+    _capture_family("mu list hint", 3)
+    runner.invoke(app, ["candidate", "draft"])
+    r = runner.invoke(app, ["list"])
+    assert "super-skill candidate show" in r.stdout
+
+
+def test_rollback_to_current_is_a_noop(env):
+    host = env
+    _make_skill(host, "alpha", "v1 desc", body="ORIGINAL")
+    runner.invoke(app, ["seed"])
+    r = runner.invoke(app, ["rollback", "alpha", "--to", "v1"])
+    assert r.exit_code == 0, r.output
+    assert "already" in r.output
+    r = runner.invoke(app, ["explain", "alpha"])
+    assert "ROLLBACK" not in r.stdout  # no v1->v1 audit entry recorded
+
+
+def test_hooks_config_rejects_command_with_trailing_args(env):
+    """Audit P2-12: removesuffix(' capture') silently no-ops for commands with
+    trailing args, generating a status-reminder hook that exits 2."""
+    r = runner.invoke(app, ["hooks-config", "--command", "super-skill capture --event auto"])
+    assert r.exit_code == 2, r.output
+    assert "capture" in r.output
+    r = runner.invoke(app, ["hooks-config"])
+    assert r.exit_code == 0
+    assert "double" in r.stderr or "plugin" in r.stderr  # double-wiring caution
+
+
+def test_doctor_dangling_pointer_suggests_rollback_to(env):
+    """Audit P1-8: explain/rollback said 'run doctor', doctor re-printed the
+    error, and nobody mentioned the actually-working fix."""
+    host = env
+    _make_skill(host, "alpha", "only one")
+    runner.invoke(app, ["seed"])
+    _dangle_active("alpha")
+    r = runner.invoke(app, ["doctor"])
+    assert r.exit_code == 1
+    assert "rollback alpha --to" in r.output and "v1" in r.output
+
+
+def test_unknown_event_type_sessions_still_clear_reminder(env, monkeypatch):
+    """Review F3: the hook counts RAW session ids while mine's watermark used
+    the Pydantic-validated view — a session written by a newer build (unknown
+    event_type enum) became an un-clearable perpetual reminder. A stray JSON
+    scalar line must not crash any reader either."""
+    from pathlib import Path
+
+    from super_skill import config
+    from super_skill.capture import EventLog
+    from super_skill.hooks import status_reminder_json
+
+    monkeypatch.setenv("SUPER_SKILL_MINE_REMINDER", "2")
+    log = EventLog()
+    from super_skill.schemas import EventType
+
+    log.append(EventType.USER_PROMPT_SUBMIT, "known", {"text": "hello"})
+    wal = next(iter(log.events_dir.glob("*/events.jsonl")))
+    with wal.open("a", encoding="utf-8") as f:
+        f.write('{"schema_version":1,"event_id":"x1","session_id":"future-1",'
+                '"event_type":"SubagentStop","timestamp":"2026-07-13T00:00:00Z",'
+                '"payload":{},"redactions":[],"consent_scope":"default"}\n')
+        f.write("42\n")  # stray scalar line
+    root = Path(config.state_root())
+    assert status_reminder_json(root) is not None  # 2 raw sessions >= 2
+    r = runner.invoke(app, ["mine"])
+    assert r.exit_code == 0, r.output
+    assert status_reminder_json(root) is None  # watermark acknowledged raw ids
+
+
+def test_hooks_config_trailing_space_normalized(env):
+    """Review F4: a trailing space passed validation yet broke removesuffix,
+    still generating a status-reminder hook that exits 2."""
+    import json
+
+    r = runner.invoke(app, ["hooks-config", "--command", "uv run super-skill capture "])
+    assert r.exit_code == 0, r.output
+    block = json.loads(r.stdout)
+    cmds = [
+        h["command"]
+        for entries in block["hooks"].values()
+        for e in entries
+        for h in e["hooks"]
+    ]
+    assert "uv run super-skill status-reminder" in cmds
+    assert not any("capture  status-reminder" in c for c in cmds)
+
+
+def test_mine_top_zero_is_a_peek(env):
+    """Review F6: --top 0 shows nothing, so it must not clear the backlog."""
+    from super_skill import config, minestate
+
+    _capture_family("nu top zero", 3)
+    r = runner.invoke(app, ["mine", "--top", "0"])
+    assert r.exit_code == 0, r.output
+    assert minestate.mined_sessions(config.state_root()) == set()
+
+
+def test_seed_foreign_git_refusal_is_clean(env, monkeypatch, tmp_path):
+    """Review F5: the P0-1 refusal surfaced as a rich traceback from seed."""
+    import subprocess
+
+    repo = tmp_path / "workrepo"
+    repo.mkdir()
+    subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
+    (repo / "f.txt").write_text("x", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.email=u@x", "-c", "user.name=u",
+         "commit", "-qm", "user work"], check=True,
+    )
+    monkeypatch.setenv("SUPER_SKILL_HOME", str(repo))
+    r = runner.invoke(app, ["seed"])
+    assert r.exit_code == 1
+    assert r.exception is None or isinstance(r.exception, SystemExit)
+    assert "refusing to adopt" in r.output

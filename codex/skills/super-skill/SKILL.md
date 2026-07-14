@@ -29,10 +29,14 @@ is NOT part of this tool — do not imply it exists.
 ## Codex specifics
 
 - Skills live in `~/.agents/skills/<name>/SKILL.md` (user-level) or `.agents/skills`
-  (repo-level). super-skill's canonical source is `~/.agents/skills`, which Codex
-  reads directly — zero-copy.
-- Point super-skill at the Codex skills dir with the `SUPER_SKILL_HOST_SKILLS`
-  environment variable (defaults to `~/.claude/skills`):
-  `SUPER_SKILL_HOST_SKILLS=~/.agents/skills super-skill seed`.
+  (repo-level). The super-skill registry is the source of truth; `~/.agents/skills`
+  is a materialization target it writes atomically — do not hand-edit skills there
+  (`doctor` flags such edits as host drift and `rollback`/`materialize` overwrite them).
+- Select Codex as the target with `--host codex` (dir override:
+  `SUPER_SKILL_CODEX_SKILLS`, default `~/.agents/skills`):
+  `super-skill seed --host codex`, `super-skill materialize --host codex`,
+  `super-skill rollback <id>` (re-syncs every host the skill was distributed to).
+  Do NOT repoint `SUPER_SKILL_HOST_SKILLS` at `~/.agents/skills` — that hijacks
+  the Claude host slot and later writes land in the wrong directory.
 - Run the CLI via shell and interpret the output for the user. `seed`/`doctor`
   (no `--fix`) are read-only; every write path is explicit and reversible.

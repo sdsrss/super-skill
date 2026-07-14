@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import os
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -39,9 +39,19 @@ from .skillmd import content_hash, parse
 _GIT_ID = ["-c", "user.name=super-skill", "-c", "user.email=super-skill@localhost"]
 
 # Untracked by the registry git backend: pre-promotion scratch (candidates/,
-# locks/), the capture WAL + mine watermark (events/, mine_state.json — private
-# session content that must not enter audit history, M9), and atomic-write temps.
-_GITIGNORE = "locks/\ncandidates/\nevents/\nmine_state.json\n*.tmp\n"
+# locks/), the capture WAL + mine watermark + session-id cache (events/,
+# mine_state.json, session_index.json — private session content that must not
+# enter audit history, M9 / review F1), and atomic-write temps. init rewrites a
+# stale .gitignore, so adding a line here self-heals existing registries.
+_GITIGNORE = "locks/\ncandidates/\nevents/\nmine_state.json\nsession_index.json\n*.tmp\n"
+
+# Everything super-skill itself may have placed in a state root. Used by the
+# unborn-HEAD adoption check: any other entry means the directory is someone's
+# working tree, not our state (review F2).
+_OWN_ENTRIES = {
+    ".git", ".gitignore", "registry", "locks", "events", "candidates",
+    "mine_state.json", "session_index.json",
+}
 
 
 class SkillRecord(BaseModel):
@@ -117,6 +127,14 @@ class Registry:
     # ---- lifecycle ---------------------------------------------------------
     def init(self) -> None:
         with self._lock():  # serialize git-init + first commit against a concurrent init
+            if (self.root / ".git").exists() and not self._owns_git_history():
+                # Adopting a foreign repo would overwrite its .gitignore and
+                # `git add -A` commit the user's working tree (audit P0-1).
+                raise RegistryError(
+                    f"refusing to adopt existing git repository at {self.root}: "
+                    "its history was not created by super-skill. Point "
+                    "SUPER_SKILL_HOME at a dedicated directory."
+                )
             self.skills_root.mkdir(parents=True, exist_ok=True)
             if not (self.root / ".git").exists():
                 self._git("init", "-q")
@@ -128,6 +146,28 @@ class Registry:
                 gi.write_text(_GITIGNORE, encoding="utf-8")
             # Idempotent: no-op when nothing is staged (already-initialized re-run).
             self._commit("chore: initialize super-skill registry (.gitignore)")
+
+    def _owns_git_history(self) -> bool:
+        """True when the repo at root is empty (unborn HEAD) or its root commit
+        was written by Registry.init — the only histories init may adopt."""
+        try:
+            roots = self._git("rev-list", "--max-parents=0", "HEAD")
+        except RegistryError:
+            # Unborn HEAD: fresh `git init`, but the WORKING TREE can still be
+            # someone's un-committed directory — init would overwrite their
+            # .gitignore (unrecoverable: never committed) and `git add -A`
+            # their files (review F2). Adopt only when the tree holds nothing
+            # but our own state and any .gitignore is already ours.
+            foreign = [p.name for p in self.root.iterdir() if p.name not in _OWN_ENTRIES]
+            if foreign:
+                return False
+            gi = self.root / ".gitignore"
+            return not gi.exists() or gi.read_text(encoding="utf-8") == _GITIGNORE
+        for commit in roots.splitlines():
+            subject = self._git("log", "-1", "--format=%s", commit.strip())
+            if subject.startswith("chore: initialize super-skill registry"):
+                return True
+        return False
 
     def _git(self, *args: str) -> str:
         proc = subprocess.run(
@@ -192,11 +232,29 @@ class Registry:
             # rather than dying on a raw pydantic traceback (M12).
             raise RegistryError(f"{skill_id}: corrupt meta.json ({e})") from e
 
-    def list_skills(self) -> list[SkillRecord]:
+    def list_skills(
+        self, on_error: Callable[[str, RegistryError], None] | None = None
+    ) -> list[SkillRecord]:
+        """All readable skill records. A corrupt meta.json raises (strict) unless
+        ``on_error`` is given, in which case the skill is skipped and reported —
+        read-only surfaces (status/list/doctor) must degrade per-skill instead of
+        dying wholesale on one bad file (audit P1-5)."""
         if not self.skills_root.exists():
             return []
-        out = [self.get(d.name) for d in sorted(self.skills_root.iterdir()) if d.is_dir()]
-        return [r for r in out if r is not None]
+        out: list[SkillRecord] = []
+        for d in sorted(self.skills_root.iterdir()):
+            if not d.is_dir():
+                continue
+            try:
+                rec = self.get(d.name)
+            except RegistryError as e:
+                if on_error is None:
+                    raise
+                on_error(d.name, e)
+                continue
+            if rec is not None:
+                out.append(rec)
+        return out
 
     def version_text(self, skill_id: str, version: str) -> str:
         p = self.skills_root / skill_id / "versions" / version / "SKILL.md"

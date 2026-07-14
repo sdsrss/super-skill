@@ -42,7 +42,7 @@ def test_corrupt_state_reads_empty(tmp_path):
 
 def test_reminder_threshold_env(monkeypatch):
     monkeypatch.delenv("SUPER_SKILL_MINE_REMINDER", raising=False)
-    assert minestate.reminder_threshold() == 3
+    assert minestate.reminder_threshold() == 20
     monkeypatch.setenv("SUPER_SKILL_MINE_REMINDER", "5")
     assert minestate.reminder_threshold() == 5
 
@@ -53,3 +53,32 @@ def test_distinct_sessions_dedupes(tmp_path):
     for sid in ("s1", "s1", "s2", "s3", "s3"):
         log.append(EventType.USER_PROMPT_SUBMIT, sid, {"text": "hi"})
     assert log.distinct_sessions() == 3
+
+
+def test_default_threshold_is_20():
+    """Audit follow-up: 3 re-fired at nearly every session for a heavy user;
+    default raised to 20 (env-overridable)."""
+    assert minestate.reminder_threshold() == 20
+
+
+def test_reminder_due_zero_disables(monkeypatch):
+    """SUPER_SKILL_MINE_REMINDER=0 means 'reminder off', not 'always fire'
+    (audit P2-13: 0 used to make an un-clearable perpetual nag)."""
+    monkeypatch.setenv("SUPER_SKILL_MINE_REMINDER", "0")
+    assert minestate.reminder_due(10_000) is False
+
+
+def test_reminder_due_at_threshold(monkeypatch):
+    monkeypatch.setenv("SUPER_SKILL_MINE_REMINDER", "5")
+    assert minestate.reminder_due(4) is False
+    assert minestate.reminder_due(5) is True
+
+
+def test_reminder_threshold_invalid_or_negative_defaults(monkeypatch, capsys):
+    """Numeric-knob consistency (audit P2-14): invalid values warn and default
+    instead of silently defaulting (EVENT_TTL already behaves this way)."""
+    monkeypatch.setenv("SUPER_SKILL_MINE_REMINDER", "abc")
+    assert minestate.reminder_threshold() == 20
+    assert "SUPER_SKILL_MINE_REMINDER" in capsys.readouterr().err
+    monkeypatch.setenv("SUPER_SKILL_MINE_REMINDER", "-4")
+    assert minestate.reminder_threshold() == 20

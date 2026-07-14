@@ -10,8 +10,10 @@ candidate -> gate (human approve) -> promote, never bypassed.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
@@ -114,11 +116,34 @@ class CandidateStore:
         except ValidationError as e:
             raise CandidateError(f"{cand_id}: corrupt candidate.json ({e})") from e
 
-    def list(self) -> list[Candidate]:
+    def list(
+        self, on_error: Callable[[str, CandidateError], None] | None = None
+    ) -> list[Candidate]:
+        """All readable candidates. A corrupt candidate.json raises (strict)
+        unless ``on_error`` is given — candidates/ is git-ignored, so unlike
+        registry meta there is nothing to restore: read-only surfaces must
+        report-and-skip, not die (audit P1-6)."""
         if not self.dir.exists():
             return []
-        out = [self.get(d.name) for d in sorted(self.dir.iterdir()) if d.is_dir()]
-        return [c for c in out if c is not None]
+        out: list[Candidate] = []
+        for d in sorted(self.dir.iterdir()):
+            if not d.is_dir():
+                continue
+            try:
+                cand = self.get(d.name)
+            except CandidateError as e:
+                if on_error is None:
+                    raise
+                on_error(d.name, e)
+                continue
+            if cand is not None:
+                out.append(cand)
+        return out
+
+    def skill_md_path(self, cand_id: str) -> Path:
+        """Where the human edits the draft — messages that say 'edit the
+        SKILL.md' must show this path (audit P2-11)."""
+        return self._cdir(cand_id) / "SKILL.md"
 
     def skill_md(self, cand_id: str) -> str:
         md = self._cdir(cand_id) / "SKILL.md"
@@ -141,15 +166,34 @@ class CandidateStore:
         os.replace(tmp, p)
 
 
+def _label_hash(label: str, n: int = 8) -> str:
+    return hashlib.sha1(label.encode("utf-8")).hexdigest()[:n]
+
+
+def _family_id(store: CandidateStore, label: str) -> str:
+    """Stable NAME_RE-legal candidate id for a family label.
+
+    slugify drops everything outside [a-z0-9-], so a pure-CJK label used to
+    slug to '' (family silently skipped) and two mixed labels could collapse
+    onto one slug (later family silently swallowed) — audit P1-4. Empty slugs
+    get a stable hash id; a slug already owned by a DIFFERENT label gets a
+    short hash suffix. ASCII labels keep their historical ids unchanged."""
+    base = slugify(label)
+    cand_id = base or f"family-{_label_hash(label)}"
+    existing = store.get(cand_id)
+    if existing is not None and existing.family_label != label:
+        cand_id = f"{cand_id[:55].rstrip('-')}-{_label_hash(label, 6)}"
+    return cand_id
+
+
 def draft_from_families(
     store: CandidateStore, families: list[OpportunityFamily]
 ) -> list[Candidate]:
-    """Create one pending candidate per new family (idempotent by slug). Families
-    whose label yields no legal slug are skipped."""
+    """Create one pending candidate per new family (idempotent by label)."""
     created: list[Candidate] = []
     for fam in families:
-        cand_id = slugify(fam.label)
-        if not cand_id or store.get(cand_id) is not None:
+        cand_id = _family_id(store, fam.label)
+        if store.get(cand_id) is not None:
             continue
         cand = Candidate(
             candidate_id=cand_id,
@@ -237,6 +281,16 @@ def reject(store: CandidateStore, cand_id: str) -> Candidate:
     cand = store.get(cand_id)
     if cand is None:
         raise CandidateError(f"unknown candidate: {cand_id}")
+    if cand.status == "approved":
+        # Saying "rejected" while the promoted skill stays active and
+        # materialized would be a lie (audit P1-9) — retirement goes through
+        # the registry, not the candidate record.
+        sid = cand.skill_id or cand_id
+        raise CandidateError(
+            f"candidate {cand_id!r} was already approved and promoted — "
+            f"rejecting it would NOT retire the live skill. Use "
+            f"`super-skill rollback {sid}` (or remove the version) instead."
+        )
     cand.status = "rejected"
     store.save(cand)
     return cand
