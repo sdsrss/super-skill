@@ -3,7 +3,17 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic versioning.
 
-## [Unreleased]
+## [0.14.0] - 2026-07-13
+
+A UX and robustness release driven by a three-lens audit (CLI surface,
+capture→reminder pipeline, docs-vs-behavior drift): 33 findings fixed across
+three batches plus a pre-merge review round. All test-driven: 223 → 268
+passing tests; `ruff` and `mypy --strict` clean.
+
+**Behavior you will notice**: the mine-backlog reminder now fires at 20 unmined
+sessions instead of 3 (`SUPER_SKILL_MINE_REMINDER` to tune, `0` to disable),
+and `mine`/`candidate draft` show the top 20 families by default (`--all` or
+`--top N` restores the old firehose). Pin `super-skill-cli==0.13.0` to revert.
 
 ### Added
 - Capture liveness in `status`: a `capture : last event <age>` line, with an
