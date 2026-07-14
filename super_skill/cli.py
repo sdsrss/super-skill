@@ -17,7 +17,7 @@ from .doctor import check_registry, repair
 from .evallite import EvalError, eval_lite
 from .gate import InstructionGateError, scan_skill_md
 from .hooks import hooks_settings
-from .mine import mine_families
+from .mine import DEFAULT_MIN_SESSIONS, mine_families
 from .registry import Registry, RegistryError
 from .schemas import NAME_RE, EventType, OperationType
 from .seed import seed_from_host
@@ -137,23 +137,40 @@ def capture(
 
 
 @app.command()
-def mine(min_sessions: int = typer.Option(3, "--min-sessions")) -> None:
+def mine(
+    min_sessions: int = typer.Option(DEFAULT_MIN_SESSIONS, "--min-sessions"),
+    top: int = typer.Option(
+        20, "--top", min=0, help="Show only the top N families by recurrence."
+    ),
+    show_all: bool = typer.Option(False, "--all", help="Show every family (lifts --top)."),
+) -> None:
     """Surface recurring task families from captured events (FR-GEN-1 signal)."""
     log = EventLog()
     session_ids = log.session_ids()
     families = mine_families(log.iter_events(), min_sessions=min_sessions)
     # Acknowledge BEFORE printing: `mine | head` dies of SIGPIPE mid-listing,
-    # and the watermark write must survive the broken pipe (D#67).
-    minestate.record_mined(log.root, session_ids)
+    # and the watermark write must survive the broken pipe (D#67). But only a
+    # default-or-looser filter counts as reviewing the backlog — a stricter
+    # --min-sessions is a peek and must not clear the reminder (audit B-2).
+    if min_sessions <= DEFAULT_MIN_SESSIONS:
+        minestate.record_mined(log.root, session_ids)
     if not families:
         typer.echo(
             f"no families recurring across >={min_sessions} sessions yet "
             f"({len(session_ids)} distinct sessions captured)"
         )
     else:
+        shown = families if show_all else families[:top]
         typer.echo(f"{'sessions':>8}  {'events':>6}  family")
-        for fam in families:
+        for fam in shown:
             typer.echo(f"{fam.session_count:>8}  {fam.event_count:>6}  {fam.label}")
+        hidden = len(families) - len(shown)
+        if hidden > 0:
+            typer.echo(
+                f"... {hidden} more family(ies) below the top {len(shown)} "
+                "— pass --all or --top N to see them",
+                err=True,
+            )
     _mine_disk_footer(log)
 
 
@@ -250,7 +267,7 @@ def status() -> None:
     typer.echo(f"events     : {log.count()}")
     typer.echo(f"candidates : {len(cands)} ({breakdown})")
     unmined = minestate.unmined(reg.root, log.session_ids())
-    if unmined >= minestate.reminder_threshold():
+    if minestate.reminder_due(unmined):
         typer.echo(f"reminder   : {unmined} distinct sessions unmined "
                    f"— run `super-skill mine`")
 
@@ -449,16 +466,35 @@ def hooks_config(
 
 
 @candidate_app.command("draft")
-def candidate_draft(min_sessions: int = typer.Option(3, "--min-sessions")) -> None:
+def candidate_draft(
+    min_sessions: int = typer.Option(DEFAULT_MIN_SESSIONS, "--min-sessions"),
+    top: int = typer.Option(
+        20, "--top", min=0, help="Draft at most the top N families by recurrence."
+    ),
+    draft_all: bool = typer.Option(False, "--all", help="Draft every family (lifts --top)."),
+) -> None:
     """Draft skill candidates from mined families (idempotent, pre-promotion)."""
     log = EventLog()
     families = mine_families(log.iter_events(), min_sessions=min_sessions)
+    picked = families if draft_all else families[:top]
     store = CandidateStore(config.state_root())
-    created = draft_from_families(store, families)
-    # Drafting acts on the mining, so it too clears the status reminder.
-    minestate.record_mined(log.root, log.session_ids())
+    created = draft_from_families(store, picked)
+    # Drafting reviews the mining, so it clears the status reminder — but only
+    # when something was actually drafted from a default-or-looser view; a
+    # 0-draft run or a stricter filter must not clear the backlog (audit B-2).
+    if created and min_sessions <= DEFAULT_MIN_SESSIONS:
+        minestate.record_mined(log.root, log.session_ids())
+    if len(families) > len(picked):
+        typer.echo(
+            f"{len(families) - len(picked)} lower-recurrence family(ies) "
+            "not drafted — pass --all or --top N",
+            err=True,
+        )
     if not created:
-        typer.echo("no new candidates (nothing mined, or all already drafted)")
+        if not families:
+            typer.echo(f"no new candidates (no families recur across >={min_sessions} sessions)")
+        else:
+            typer.echo(f"no new candidates (all {len(picked)} mined family(ies) already drafted)")
         return
     typer.echo(f"drafted {len(created)} candidate(s):")
     for c in created:

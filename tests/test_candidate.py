@@ -46,11 +46,15 @@ def test_draft_is_idempotent(tmp_path):
     assert len(store.list()) == 1
 
 
-def test_draft_skips_unslugifiable(tmp_path):
+def test_draft_unslugifiable_gets_stable_hash_id(tmp_path):
+    """Contract updated by audit P1-4: a label slugify reduces to '' (pure CJK,
+    punctuation) is no longer silently skipped — it drafts under a stable
+    family-<hash> id, and redrafting stays idempotent."""
     store = CandidateStore(root=tmp_path / "state")
     created = draft_from_families(store, [_fam("!!! ???")])
-    assert created == []
-    assert store.list() == []
+    assert len(created) == 1
+    assert created[0].candidate_id.startswith("family-")
+    assert draft_from_families(store, [_fam("!!! ???")]) == []
 
 
 def test_approve_promotes_to_registry_and_materializes(tmp_path):
@@ -229,3 +233,28 @@ def test_candidate_json_stamped_and_tolerates_unknown_fields(tmp_path):
     data["future_field"] = "from a newer super-skill"
     p.write_text(json.dumps(data), encoding="utf-8")
     assert store.get("dependency-resolution") is not None  # tolerated, not corrupt
+
+
+def test_draft_cjk_labels_never_silently_vanish(tmp_path):
+    """Audit P1-4: slugify drops CJK entirely — pure-Chinese families used to
+    slug to '' and be skipped with a false 'nothing mined' message, and mixed
+    labels collapsed onto the same slug, swallowing later families."""
+    from super_skill.candidate import CandidateStore, draft_from_families
+    from super_skill.mine import OpportunityFamily
+
+    fams = [
+        OpportunityFamily("修复 复测", 5, 9),
+        OpportunityFamily("构建 quickly", 4, 8),
+        OpportunityFamily("测试 quickly", 3, 7),
+    ]
+    store = CandidateStore(tmp_path)
+    created = draft_from_families(store, fams)
+    assert len(created) == 3, [c.candidate_id for c in created]
+    ids = {c.candidate_id for c in created}
+    assert len(ids) == 3  # no collision swallowed a family
+    from super_skill.schemas import NAME_RE
+
+    for cid in ids:
+        assert NAME_RE.match(cid), cid
+    # idempotent re-run: same labels create nothing new
+    assert draft_from_families(store, fams) == []

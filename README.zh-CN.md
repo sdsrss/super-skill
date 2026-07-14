@@ -129,7 +129,7 @@ super-skill candidate approve <id>
 | `SUPER_SKILL_HOME` | `~/.super-skill` | 注册表 + 控制状态(git 仓库)。 |
 | `SUPER_SKILL_HOST_SKILLS` | `~/.claude/skills` | Claude Code 技能目录(`--host claude`)。 |
 | `SUPER_SKILL_CODEX_SKILLS` | `~/.agents/skills` | Codex 技能目录(`--host codex`)。 |
-| `SUPER_SKILL_MINE_REMINDER` | `3` | `status` 提醒挖掘前的去重未挖掘会话数阈值。 |
+| `SUPER_SKILL_MINE_REMINDER` | `20` | `status`/SessionStart 提醒挖掘前的去重未挖掘会话数阈值;`0` 关闭提醒。 |
 | `SUPER_SKILL_EVENT_TTL` | `14` | 原始捕获事件保留天数;`prune` 删除更旧的事件日(默认 dry-run)。 |
 
 ## 范围

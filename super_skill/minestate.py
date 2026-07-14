@@ -16,23 +16,47 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import tempfile
 from collections.abc import Iterable
 from pathlib import Path
 
 _FILE = "mine_state.json"
-_DEFAULT_THRESHOLD = 3
+# 3 re-fired at nearly every session opening for a heavy multi-session user
+# (audit 2026-07-13); 20 keeps the nudge meaningful. 0 disables it entirely.
+_DEFAULT_THRESHOLD = 20
 
 
 def reminder_threshold() -> int:
-    """Distinct unmined sessions before status nudges (env-overridable)."""
+    """Distinct unmined sessions before status nudges (env-overridable).
+
+    0 = reminder disabled (see reminder_due). Invalid or negative values warn
+    and fall back to the default, consistent with SUPER_SKILL_EVENT_TTL."""
     raw = os.environ.get("SUPER_SKILL_MINE_REMINDER")
     if raw is None:
         return _DEFAULT_THRESHOLD
     try:
-        return int(raw)
+        threshold = int(raw)
+        if threshold < 0:
+            raise ValueError
+        return threshold
     except ValueError:
+        print(
+            f"ignoring invalid SUPER_SKILL_MINE_REMINDER={raw!r}; "
+            f"using default {_DEFAULT_THRESHOLD}",
+            file=sys.stderr,
+        )
         return _DEFAULT_THRESHOLD
+
+
+def reminder_due(unmined_count: int) -> bool:
+    """True when the unmined backlog should nudge the user.
+
+    Kept separate from a bare `>= threshold` comparison because threshold 0
+    means OFF — the naive comparison made 0 an un-clearable perpetual nag
+    (audit P2-13: mine can never bring unmined below 0)."""
+    threshold = reminder_threshold()
+    return threshold > 0 and unmined_count >= threshold
 
 
 def _path(root: Path) -> Path:

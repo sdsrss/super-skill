@@ -148,7 +148,7 @@ super-skill candidate approve <id>
 | `SUPER_SKILL_HOME` | `~/.super-skill` | Registry + control state (a git repo). |
 | `SUPER_SKILL_HOST_SKILLS` | `~/.claude/skills` | Claude Code skills directory (`--host claude`). |
 | `SUPER_SKILL_CODEX_SKILLS` | `~/.agents/skills` | Codex skills directory (`--host codex`). |
-| `SUPER_SKILL_MINE_REMINDER` | `3` | Distinct unmined sessions before `status` nudges you to mine. |
+| `SUPER_SKILL_MINE_REMINDER` | `20` | Distinct unmined sessions before `status`/SessionStart nudge you to mine; `0` disables the reminder. |
 | `SUPER_SKILL_EVENT_TTL` | `14` | Days of raw captured events kept; `prune` deletes older event days (dry-run by default). |
 
 ## Scope

@@ -66,7 +66,7 @@ def status_reminder_json(root: Path) -> str | None:
     instruction so the model relays it without derailing the user's task."""
     log = EventLog(root)
     n = minestate.unmined(root, log.session_ids())
-    if n < minestate.reminder_threshold():
+    if not minestate.reminder_due(n):
         return None
     text = (
         f"[super-skill plugin] {n} distinct captured coding sessions are "

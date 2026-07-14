@@ -10,6 +10,7 @@ candidate -> gate (human approve) -> promote, never bypassed.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 from datetime import datetime
@@ -141,15 +142,34 @@ class CandidateStore:
         os.replace(tmp, p)
 
 
+def _label_hash(label: str, n: int = 8) -> str:
+    return hashlib.sha1(label.encode("utf-8")).hexdigest()[:n]
+
+
+def _family_id(store: CandidateStore, label: str) -> str:
+    """Stable NAME_RE-legal candidate id for a family label.
+
+    slugify drops everything outside [a-z0-9-], so a pure-CJK label used to
+    slug to '' (family silently skipped) and two mixed labels could collapse
+    onto one slug (later family silently swallowed) — audit P1-4. Empty slugs
+    get a stable hash id; a slug already owned by a DIFFERENT label gets a
+    short hash suffix. ASCII labels keep their historical ids unchanged."""
+    base = slugify(label)
+    cand_id = base or f"family-{_label_hash(label)}"
+    existing = store.get(cand_id)
+    if existing is not None and existing.family_label != label:
+        cand_id = f"{cand_id[:55].rstrip('-')}-{_label_hash(label, 6)}"
+    return cand_id
+
+
 def draft_from_families(
     store: CandidateStore, families: list[OpportunityFamily]
 ) -> list[Candidate]:
-    """Create one pending candidate per new family (idempotent by slug). Families
-    whose label yields no legal slug are skipped."""
+    """Create one pending candidate per new family (idempotent by label)."""
     created: list[Candidate] = []
     for fam in families:
-        cand_id = slugify(fam.label)
-        if not cand_id or store.get(cand_id) is not None:
+        cand_id = _family_id(store, fam.label)
+        if store.get(cand_id) is not None:
             continue
         cand = Candidate(
             candidate_id=cand_id,

@@ -210,10 +210,11 @@ def test_status_reminder_silent_when_no_backlog(env):
     assert r.output.strip() == ""
 
 
-def test_status_reminder_emits_envelope_on_backlog(env):
+def test_status_reminder_emits_envelope_on_backlog(env, monkeypatch):
     import json
 
-    _capture_sessions(3)  # default reminder threshold
+    monkeypatch.setenv("SUPER_SKILL_MINE_REMINDER", "3")  # default is now 20
+    _capture_sessions(3)
     r = runner.invoke(app, ["status-reminder"])
     assert r.exit_code == 0
     envelope = json.loads(r.output)
@@ -488,7 +489,8 @@ def test_doctor_fix_cli(env):
     assert "needs manual fix" in r.output
 
 
-def test_mine_reminder_in_status(env):
+def test_mine_reminder_in_status(env, monkeypatch):
+    monkeypatch.setenv("SUPER_SKILL_MINE_REMINDER", "3")  # default is now 20
     import json
 
     for sid in ("s1", "s2", "s3"):
@@ -674,3 +676,80 @@ def test_mine_footer_and_prune_agree_on_invalid_ttl_env(env, monkeypatch):
     r = runner.invoke(app, ["prune"])  # dry-run must work, not exit 2
     assert r.exit_code == 0, r.output
     assert "2020-01-01" in r.output
+
+
+def _capture_family(text, sessions):
+    """Seed one keyword family recurring across N distinct sessions."""
+    from super_skill.capture import EventLog
+    from super_skill.schemas import EventType
+
+    log = EventLog()
+    for i in range(sessions):
+        log.append(EventType.USER_PROMPT_SUBMIT, f"s-{text.split()[0]}-{i}", {"text": text})
+
+
+def test_mine_top_caps_output_all_lifts_it(env):
+    """Audit P1-3: mine printed 73k+ lines uncapped. Default --top 20; here
+    --top 1 shows one family and says how many were hidden; --all shows both."""
+    _capture_family("alpha rebuild pipeline", 4)
+    _capture_family("beta rollout checklist", 3)
+    r = runner.invoke(app, ["mine", "--top", "1"])
+    assert r.exit_code == 0, r.output
+    family_rows = [ln for ln in r.stdout.splitlines() if "  " in ln and "family" not in ln]
+    assert len(family_rows) == 1, r.stdout
+    assert "more famil" in r.stderr  # "N more family(ies) — use --all"
+    r = runner.invoke(app, ["mine", "--all"])
+    assert "alpha" in r.stdout.replace("\n", " ") and "beta" in r.stdout.replace("\n", " ")
+
+
+def test_mine_stricter_filter_is_a_peek_not_a_review(env):
+    """Audit B-2: `mine --min-sessions 999` printed 'no families' yet cleared
+    the whole backlog. A stricter-than-default filter must not move the
+    watermark; a default mine afterwards does."""
+    from super_skill import config, minestate
+
+    _capture_family("gamma flaky retry", 3)
+    r = runner.invoke(app, ["mine", "--min-sessions", "999"])
+    assert r.exit_code == 0, r.output
+    assert minestate.mined_sessions(config.state_root()) == set()
+    r = runner.invoke(app, ["mine"])
+    assert r.exit_code == 0, r.output
+    assert len(minestate.mined_sessions(config.state_root())) == 3
+
+
+def test_draft_records_watermark_only_when_it_drafts(env):
+    """Audit B-2: `candidate draft` cleared the reminder backlog even when it
+    created zero candidates."""
+    from super_skill import config, minestate
+
+    r = runner.invoke(app, ["candidate", "draft"])  # empty WAL -> 0 drafted
+    assert r.exit_code == 0, r.output
+    assert minestate.mined_sessions(config.state_root()) == set()
+    _capture_family("delta release notes", 3)
+    r = runner.invoke(app, ["candidate", "draft"])
+    assert "drafted 2 candidate" in r.stdout, r.output  # 2 bigrams from the text
+    assert len(minestate.mined_sessions(config.state_root())) == 3
+
+
+def test_draft_top_caps_and_reports_rest(env):
+    _capture_family("epsilon regression sweep", 4)
+    _capture_family("zeta packaging fix", 3)
+    r = runner.invoke(app, ["candidate", "draft", "--top", "1"])
+    assert r.exit_code == 0, r.output
+    assert "drafted 1 candidate" in r.stdout
+    assert "not drafted" in r.stderr
+
+
+def test_status_reminder_env_zero_disables_nudge(env, monkeypatch):
+    """Audit P2-13: threshold 0 used to nudge forever and mine couldn't clear it."""
+    from pathlib import Path
+
+    from super_skill import config
+    from super_skill.hooks import status_reminder_json
+
+    _capture_family("eta many sessions", 25)
+    monkeypatch.setenv("SUPER_SKILL_MINE_REMINDER", "0")
+    r = runner.invoke(app, ["status"])
+    # the label, not the bare word — tmp_path embeds the test name (…reminder…)
+    assert "reminder   :" not in r.stdout
+    assert status_reminder_json(Path(config.state_root())) is None

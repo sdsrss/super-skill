@@ -5,6 +5,27 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Changed
+- Mine-backlog reminder default threshold raised 3 → 20 unmined sessions, and
+  `SUPER_SKILL_MINE_REMINDER=0` now means "reminder off" (previously it fired
+  forever and `mine` could never clear it); invalid/negative values warn and
+  fall back instead of silently defaulting. At threshold 3 a heavy
+  multi-session user was nudged at nearly every session opening.
+- `mine` and `candidate draft` now cap output at the top 20 families by
+  recurrence (`--top N` / `--all` to change); `mine` previously printed every
+  family (73k+ lines on real data) and one `draft` run could create thousands
+  of candidate directories. The hidden/undrafted remainder is reported on
+  stderr.
+- A stricter-than-default `--min-sessions` no longer counts as reviewing the
+  backlog: `mine --min-sessions 999` used to print "no families" yet cleared
+  the entire reminder watermark. `candidate draft` likewise records the
+  watermark only when it actually drafted something.
+- Families whose label slugifies to nothing (pure-Chinese/punctuation) draft
+  under a stable `family-<hash>` id instead of being silently skipped with a
+  false "nothing mined" message, and two labels that collapse onto the same
+  slug get disambiguated with a hash suffix instead of the later one being
+  swallowed — mined Chinese sessions can now actually become candidates.
+
 ### Added
 - `mine` now ends with an `events on disk:` footer (stderr) reporting the raw-event
   WAL footprint and, when event days have aged past the FR-CAP-6 TTL, a one-line
