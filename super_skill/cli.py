@@ -11,7 +11,14 @@ import sys
 import typer
 
 from . import config, hooks, minestate
-from .candidate import CandidateError, CandidateStore, approve, draft_from_families, reject
+from .candidate import (
+    CandidateError,
+    CandidateStore,
+    _has_template_placeholder,
+    approve,
+    draft_from_families,
+    reject,
+)
 from .capture import DEFAULT_EVENT_TTL_DAYS, EventLog
 from .doctor import check_registry, repair
 from .evallite import EvalError, eval_lite
@@ -57,6 +64,10 @@ def seed(host: str = typer.Option("claude", "--host", help="source host: claude 
         raise typer.Exit(1)
     reg = _registry()
     src = config.host_skills_dir(host)
+    if not src.exists():
+        # all-zero output from a typo'd dir is indistinguishable from an empty
+        # host (audit P3-16) — say which path was looked at.
+        typer.echo(f"warning: host skills dir does not exist: {src}", err=True)
     report = seed_from_host(reg, src)
     typer.echo(
         f"seed: {len(report.imported)} imported, {len(report.updated)} updated, "
@@ -239,22 +250,34 @@ def prune(
     """Prune captured event days older than the TTL (default 14 days; dry-run)."""
     ttl = days if days is not None else _event_ttl_days()
     log = EventLog()
-    pruned = log.prune(days=ttl, apply=apply)
-    if not pruned:
+    stale = log.prune(days=ttl)  # dry-run first: name the days before deleting
+    if not stale:
         typer.echo(f"nothing to prune (all event days within {ttl} days)")
         return
+    # Deleting a never-mined session makes it unreviewable forever — the
+    # backlog silently ages out with no mine ever run (audit B-5). Warn either
+    # way; the deletion itself stays the user's explicit call.
+    never_mined = log.session_ids_for_days(stale) - minestate.mined_sessions(log.root)
+    if never_mined:
+        typer.echo(
+            f"warning: {len(never_mined)} never-mined session(s) live in these "
+            "day(s) — run `super-skill mine` first if you still want them mined",
+            err=True,
+        )
+    if apply:
+        log.prune(days=ttl, apply=True)
     verb = "pruned" if apply else "would prune (dry-run — pass --apply to delete)"
-    typer.echo(f"{verb} {len(pruned)} day(s): {', '.join(pruned)}")
+    typer.echo(f"{verb} {len(stale)} day(s): {', '.join(stale)}")
 
 
 @app.command()
 def status() -> None:
     """Registry summary: location, git head, skill/version/candidate counts."""
     reg = _registry()
-    records = reg.list_skills()
+    records = reg.list_skills(on_error=_warn_corrupt_meta)
     active = sum(1 for r in records if r.skill.active_version)
     versions = sum(len(r.versions) for r in records)
-    cands = CandidateStore(reg.root).list()
+    cands = CandidateStore(reg.root).list(on_error=_warn_corrupt_candidate)
     by_status: dict[str, int] = {}
     for c in cands:
         by_status[c.status] = by_status.get(c.status, 0) + 1
@@ -264,19 +287,53 @@ def status() -> None:
     typer.echo(f"skills     : {len(records)} ({active} active)")
     typer.echo(f"versions   : {versions}")
     log = EventLog(reg.root)
-    typer.echo(f"events     : {log.count()}")
+    n_events, sessions = log.scan_stats()  # one WAL pass, not two
+    typer.echo(f"events     : {n_events}")
+    typer.echo(f"capture    : {_capture_liveness(log)}")
     typer.echo(f"candidates : {len(cands)} ({breakdown})")
-    unmined = minestate.unmined(reg.root, log.session_ids())
+    unmined = minestate.unmined(reg.root, sessions)
     if minestate.reminder_due(unmined):
         typer.echo(f"reminder   : {unmined} distinct sessions unmined "
                    f"— run `super-skill mine`")
+
+
+def _warn_corrupt_meta(skill_id: str, e: RegistryError) -> None:
+    typer.echo(f"warning: skill {skill_id!r}: corrupt meta.json — "
+               f"run `super-skill doctor --fix` to restore it from git", err=True)
+
+
+def _warn_corrupt_candidate(cand_id: str, e: CandidateError) -> None:
+    typer.echo(f"warning: candidate {cand_id!r}: corrupt candidate.json — "
+               f"skipped (delete or re-draft it)", err=True)
+
+
+def _age_str(seconds: float) -> str:
+    if seconds < 120:
+        return "just now"
+    if seconds < 7200:
+        return f"{int(seconds // 60)}m ago"
+    if seconds < 172800:
+        return f"{int(seconds // 3600)}h ago"
+    return f"{int(seconds // 86400)}d ago"
+
+
+def _capture_liveness(log: EventLog) -> str:
+    """Last-event age line — a dead hook chain (CLI off PATH, broken merge,
+    unwritable state) was indistinguishable from 'not coding much' (audit B-1)."""
+    age = log.last_event_age_seconds()
+    if age is None:
+        return "no events captured yet — wire hooks with `super-skill hooks-config`"
+    line = f"last event {_age_str(age)}"
+    if age > 86400:
+        line += " — capture may be broken (check hooks wiring / PATH)"
+    return line
 
 
 @app.command("list")
 def list_() -> None:
     """List registered skills plus any pending candidates awaiting approval."""
     reg = _registry()
-    records = reg.list_skills()
+    records = reg.list_skills(on_error=_warn_corrupt_meta)
     if not records:
         typer.echo("no skills registered — run `super-skill seed`")
     for r in records:
@@ -285,9 +342,13 @@ def list_() -> None:
         desc = _short(av.frontmatter.description) if av else ""
         typer.echo(f"{r.skill.skill_id:<32} {ver:<5} {desc}")
 
-    pending = [c for c in CandidateStore(reg.root).list() if c.status == "pending"]
+    pending = [
+        c for c in CandidateStore(reg.root).list(on_error=_warn_corrupt_candidate)
+        if c.status == "pending"
+    ]
     if pending:
-        typer.echo(f"\npending candidates ({len(pending)}) — review with `candidate show <id>`:")
+        typer.echo(f"\npending candidates ({len(pending)}) "
+                   "— review with `super-skill candidate show <id>`:")
         for c in pending:
             typer.echo(f"  {c.candidate_id:<30} {c.session_count} sessions  {c.family_label}")
 
@@ -377,6 +438,12 @@ def rollback(
             typer.echo("no previous version to roll back to", err=True)
             raise typer.Exit(1)
         to = parents[0]
+    if to == rec.skill.active_version:
+        # No-op guard (audit P3-17): don't report "rolled back" and append a
+        # vN->vN audit entry for a change that changed nothing.
+        typer.echo(f"{skill_id} is already at {to} — nothing to do "
+                   f"(to re-sync hosts, use `super-skill materialize {skill_id}`)")
+        return
     try:
         rec = reg.set_active(skill_id, to, op=OperationType.ROLLBACK, reason=reason or None)
         # Re-materialize to every host this skill was pushed to, not just the
@@ -458,9 +525,22 @@ def hooks_config(
 
     Prints only — merge it into ~/.claude/settings.json yourself (editing
     user-global config is your call, not the tool's)."""
+    if not command.rstrip().endswith(" capture") and command.strip() != "super-skill capture":
+        # removesuffix(" capture") silently no-ops for a command with trailing
+        # args, generating a status-reminder hook that exits 2 (audit P2-12).
+        typer.echo(
+            f"--command must end in ' capture' (got {command!r}); trailing "
+            "arguments are not supported — the same prefix is reused for the "
+            "status-reminder hook.",
+            err=True,
+        )
+        raise typer.Exit(2)
     typer.echo(json.dumps(hooks_settings(command), indent=2))
     typer.echo(
-        "\n# merge the above into ~/.claude/settings.json (or a project .claude/settings.json)",
+        "\n# merge the above into ~/.claude/settings.json (or a project .claude/settings.json)."
+        "\n# note: if the super-skill Claude Code plugin is installed, its hooks.json already"
+        "\n# wires capture — merging this block TOO would record every event twice (double"
+        "\n# counts, double disk).",
         err=True,
     )
 
@@ -498,13 +578,14 @@ def candidate_draft(
         return
     typer.echo(f"drafted {len(created)} candidate(s):")
     for c in created:
-        typer.echo(f"  {c.candidate_id:<32} {c.session_count} sessions — edit then approve")
+        typer.echo(f"  {c.candidate_id:<32} {c.session_count} sessions")
+        typer.echo(f"    edit {store.skill_md_path(c.candidate_id)} then approve")
 
 
 @candidate_app.command("list")
 def candidate_list() -> None:
     """List drafted candidates and their status."""
-    cands = CandidateStore(config.state_root()).list()
+    cands = CandidateStore(config.state_root()).list(on_error=_warn_corrupt_candidate)
     if not cands:
         typer.echo("no candidates — run `super-skill candidate draft`")
         return
@@ -527,9 +608,22 @@ def candidate_show(candidate_id: str) -> None:
     typer.echo(f"candidate  : {cand.candidate_id} ({cand.status})")
     typer.echo(f"family     : {cand.family_label}")
     typer.echo(f"recurrence : {cand.session_count} sessions, {cand.event_count} events")
+    typer.echo(f"draft      : {store.skill_md_path(candidate_id)}")
     if cand.version:
         typer.echo(f"promoted   : {cand.skill_id}@{cand.version}")
-    raw = store.skill_md(candidate_id)
+    try:
+        raw = store.skill_md(candidate_id)
+    except CandidateError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1) from e
+    # Mirror EVERY approve blocker (audit P2-10): show used to read as
+    # approvable ('gate: clean' + 'eval-lite: pass') while approve still
+    # blocked on the template-placeholder check show never ran.
+    if _has_template_placeholder(raw):
+        typer.echo("placeholder: template scaffold still present — approve will be "
+                   "BLOCKED (edit the draft file above first)")
+    else:
+        typer.echo("placeholder: none (draft was edited)")
     findings = scan_skill_md(raw)
     if findings:
         typer.echo(f"gate       : {len(findings)} finding(s) — approve will be BLOCKED:")

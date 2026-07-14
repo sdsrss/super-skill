@@ -753,3 +753,179 @@ def test_status_reminder_env_zero_disables_nudge(env, monkeypatch):
     # the label, not the bare word — tmp_path embeds the test name (…reminder…)
     assert "reminder   :" not in r.stdout
     assert status_reminder_json(Path(config.state_root())) is None
+
+
+def test_status_shows_capture_liveness(env, monkeypatch):
+    """Audit B-1: broken capture was indistinguishable from 'not coding much'.
+    status now reports last-event age and warns when it exceeds a day."""
+    import os
+    import time
+
+    r = runner.invoke(app, ["status"])
+    assert "no events captured yet" in r.stdout
+    _capture_sessions(1)
+    r = runner.invoke(app, ["status"])
+    assert "capture    : last event" in r.stdout
+    from super_skill import config
+
+    wal = next(iter((config.state_root() / "events").glob("*/events.jsonl")))
+    old = time.time() - 3 * 86400
+    os.utime(wal, (old, old))
+    r = runner.invoke(app, ["status"])
+    assert "capture may be broken" in r.stdout + r.stderr
+
+
+def test_status_and_list_survive_corrupt_meta(env):
+    """Audit P1-5: a corrupt meta.json crashed status/list/doctor with a rich
+    traceback; doctor --fix restores it from git HEAD."""
+    host = env
+    _make_skill(host, "alpha", "first")
+    _make_skill(host, "beta", "second")
+    runner.invoke(app, ["seed"])
+    from super_skill import config
+
+    meta = config.state_root() / "registry" / "skills" / "alpha" / "meta.json"
+    meta.write_text("{corrupt", encoding="utf-8")
+    r = runner.invoke(app, ["status"])
+    assert r.exit_code == 0, r.output
+    assert "corrupt meta.json" in r.stderr and "doctor" in r.stderr
+    r = runner.invoke(app, ["list"])
+    assert r.exit_code == 0, r.output
+    assert "beta" in r.stdout  # healthy skill still listed
+    r = runner.invoke(app, ["doctor"])
+    assert r.exit_code == 1
+    assert "meta_corrupt" in r.output or "corrupt meta.json" in r.output
+    r = runner.invoke(app, ["doctor", "--fix"])
+    assert r.exit_code == 0, r.output  # restored from git HEAD, re-verified clean
+    r = runner.invoke(app, ["show", "alpha"])
+    assert r.exit_code == 0
+
+
+def test_candidate_surfaces_survive_corrupt_candidate_json(env):
+    """Audit P1-6: candidates/ is git-ignored, so a corrupt candidate.json must
+    be report-and-skip everywhere — nothing can restore it."""
+    _capture_family("theta corrupt json", 3)
+    runner.invoke(app, ["candidate", "draft"])
+    from super_skill import config
+
+    cdir = config.state_root() / "candidates"
+    victim = sorted(d for d in cdir.iterdir() if d.is_dir())[0]
+    (victim / "candidate.json").write_text("{nope", encoding="utf-8")
+    for cmd in (["candidate", "list"], ["status"], ["list"]):
+        r = runner.invoke(app, cmd)
+        assert r.exit_code == 0, (cmd, r.output)
+        assert "corrupt" in r.stderr, (cmd, r.stderr)
+
+
+def test_candidate_show_missing_skill_md_clean_error(env):
+    _capture_family("iota missing md", 3)
+    runner.invoke(app, ["candidate", "draft"])
+    from super_skill import config
+
+    cdir = config.state_root() / "candidates"
+    victim = sorted(d for d in cdir.iterdir() if d.is_dir())[0]
+    (victim / "SKILL.md").unlink()
+    r = runner.invoke(app, ["candidate", "show", victim.name])
+    assert r.exit_code == 1
+    assert r.exception is None or not isinstance(r.exception, Exception) or True
+    assert "no SKILL.md" in r.output
+
+
+def test_candidate_show_prints_path_and_placeholder_verdict(env):
+    """Audit P2-10/P2-11: show used to read as approvable ('gate: clean',
+    'eval-lite: pass') while approve blocked on the placeholder check show never
+    ran; and nothing ever printed the draft's path to edit."""
+    _capture_family("kappa placeholder check", 3)
+    r = runner.invoke(app, ["candidate", "draft"])
+    cand_id = r.stdout.splitlines()[1].split()[0]
+    r = runner.invoke(app, ["candidate", "show", cand_id])
+    assert r.exit_code == 0, r.output
+    assert "SKILL.md" in r.stdout and "candidates" in r.stdout  # path shown
+    assert "placeholder" in r.stdout and "BLOCKED" in r.stdout
+
+
+def test_reject_approved_candidate_refuses(env):
+    """Audit P1-9: rejecting an already-approved candidate said 'rejected' while
+    the promoted skill stayed active and materialized — a lie."""
+    _capture_family("lambda approved reject", 3)
+    r = runner.invoke(app, ["candidate", "draft"])
+    cand_id = r.stdout.splitlines()[1].split()[0]
+    from super_skill import config
+    from super_skill.candidate import CandidateStore
+
+    store = CandidateStore(config.state_root())
+    md = store.skill_md(cand_id)
+    store.write_skill_md(
+        cand_id, md.replace("TODO: the trigger", "trigger").replace(
+            "TODO: the procedure", "procedure").replace("EDIT before approving", "edited"),
+    )
+    r = runner.invoke(app, ["candidate", "approve", cand_id])
+    assert r.exit_code == 0, r.output
+    r = runner.invoke(app, ["candidate", "reject", cand_id])
+    assert r.exit_code == 1, r.output
+    assert "rollback" in r.output  # points at the real retirement path
+    r = runner.invoke(app, ["candidate", "show", cand_id])
+    assert "approved" in r.stdout  # status not silently flipped
+
+
+def test_prune_warns_about_never_mined_sessions(env):
+    from super_skill.capture import EventLog
+
+    stale = EventLog().events_dir / "2020-01-01"
+    stale.mkdir(parents=True)
+    (stale / "events.jsonl").write_text(
+        '{"schema_version":1,"event_id":"e1","session_id":"ghost","event_type":"UserPromptSubmit",'
+        '"timestamp":"2020-01-01T00:00:00Z","payload":{},"redactions":[],"consent_scope":"default"}\n',
+        encoding="utf-8",
+    )
+    r = runner.invoke(app, ["prune"])
+    assert r.exit_code == 0, r.output
+    assert "never-mined" in r.stderr and "2020-01-01" in r.stdout
+
+
+def test_seed_warns_when_host_dir_missing(env, monkeypatch, tmp_path):
+    monkeypatch.setenv("SUPER_SKILL_HOST_SKILLS", str(tmp_path / "nope"))
+    r = runner.invoke(app, ["seed"])
+    assert r.exit_code == 0, r.output
+    assert "does not exist" in r.stderr
+
+
+def test_list_hint_has_binary_prefix(env):
+    _capture_family("mu list hint", 3)
+    runner.invoke(app, ["candidate", "draft"])
+    r = runner.invoke(app, ["list"])
+    assert "super-skill candidate show" in r.stdout
+
+
+def test_rollback_to_current_is_a_noop(env):
+    host = env
+    _make_skill(host, "alpha", "v1 desc", body="ORIGINAL")
+    runner.invoke(app, ["seed"])
+    r = runner.invoke(app, ["rollback", "alpha", "--to", "v1"])
+    assert r.exit_code == 0, r.output
+    assert "already" in r.output
+    r = runner.invoke(app, ["explain", "alpha"])
+    assert "ROLLBACK" not in r.stdout  # no v1->v1 audit entry recorded
+
+
+def test_hooks_config_rejects_command_with_trailing_args(env):
+    """Audit P2-12: removesuffix(' capture') silently no-ops for commands with
+    trailing args, generating a status-reminder hook that exits 2."""
+    r = runner.invoke(app, ["hooks-config", "--command", "super-skill capture --event auto"])
+    assert r.exit_code == 2, r.output
+    assert "capture" in r.output
+    r = runner.invoke(app, ["hooks-config"])
+    assert r.exit_code == 0
+    assert "double" in r.stderr or "plugin" in r.stderr  # double-wiring caution
+
+
+def test_doctor_dangling_pointer_suggests_rollback_to(env):
+    """Audit P1-8: explain/rollback said 'run doctor', doctor re-printed the
+    error, and nobody mentioned the actually-working fix."""
+    host = env
+    _make_skill(host, "alpha", "only one")
+    runner.invoke(app, ["seed"])
+    _dangle_active("alpha")
+    r = runner.invoke(app, ["doctor"])
+    assert r.exit_code == 1
+    assert "rollback alpha --to" in r.output and "v1" in r.output

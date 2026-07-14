@@ -5,7 +5,39 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- Capture liveness in `status`: a `capture : last event <age>` line, with an
+  explicit warning past 24h — a silently-dead hook chain (CLI off PATH, broken
+  settings merge, unwritable state dir) was previously indistinguishable from
+  "haven't coded much lately". An empty WAL points at `hooks-config`.
+- `prune` (dry-run and `--apply`) now warns when the prunable days contain
+  sessions that were never mined — deleting them silently made the backlog
+  age out unreviewably.
+- `candidate show` prints the draft file path and a `placeholder:` verdict
+  mirroring the approve-time template check (show used to read as approvable
+  while approve still blocked); `candidate draft` prints the path to edit.
+- `doctor` now reports a corrupt `meta.json` as a `meta_corrupt` issue and
+  `doctor --fix` restores it from git HEAD; `status`/`list` skip the corrupt
+  skill with a warning instead of dying on a pydantic traceback. Corrupt
+  `candidate.json` files are likewise report-and-skip everywhere (candidates
+  are git-ignored, so there is nothing to restore).
+
 ### Changed
+- The SessionStart reminder hook no longer re-parses the entire event WAL at
+  every session opening: past-day session ids come from a size-keyed sidecar
+  (`session_index.json`), cutting the hook's WAL cost from ~0.35s at 46MB
+  (and ~1.5s at a full 14-day TTL, where it would start hitting the 10s hook
+  timeout and silently self-disable) to a single today-file parse. `status`
+  computes its event/session counts in one WAL pass instead of two.
+- `candidate reject` on an already-approved candidate now refuses with the
+  real retirement path (`rollback`) instead of reporting "rejected" while the
+  promoted skill stayed live; `rollback --to <current>` is a no-op instead of
+  recording a spurious vN→vN audit entry; `doctor`'s dangling-pointer message
+  names the existing versions and the exact `rollback --to` fix; `seed` warns
+  when the host skills dir does not exist; `hooks-config` rejects a
+  `--command` with trailing arguments (it used to emit a status-reminder hook
+  that exits 2) and its merge note warns about double-capture when the plugin
+  hooks are already active.
 - Mine-backlog reminder default threshold raised 3 → 20 unmined sessions, and
   `SUPER_SKILL_MINE_REMINDER=0` now means "reminder off" (previously it fired
   forever and `mine` could never clear it); invalid/negative values warn and

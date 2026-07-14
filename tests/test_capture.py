@@ -308,3 +308,52 @@ def test_disk_usage_days_counts_only_date_dirs(tmp_path):
     total, days = log.disk_usage()
     assert days == 0
     assert total >= 100
+
+
+def test_scan_stats_single_pass_matches(tmp_path):
+    log = EventLog(root=tmp_path)
+    for sid in ("a", "b"):
+        log.append(EventType.USER_PROMPT_SUBMIT, sid, {"text": f"event {sid}"})
+    log.append(EventType.STOP, "a", {"text": "done"})
+    n, sessions = log.scan_stats()
+    assert n == log.count() == 3
+    assert sessions == log.session_ids() == {"a", "b"}
+
+
+def test_last_event_age_none_when_empty_and_grows_with_mtime(tmp_path):
+    import os
+    import time
+
+    log = EventLog(root=tmp_path)
+    assert log.last_event_age_seconds() is None
+    log.append(EventType.USER_PROMPT_SUBMIT, "s", {"text": "x"})
+    fresh = log.last_event_age_seconds()
+    assert fresh is not None and fresh < 60
+    wal = next(iter(log.events_dir.glob("*/events.jsonl")))
+    two_days = time.time() - 2 * 86400
+    os.utime(wal, (two_days, two_days))
+    aged = log.last_event_age_seconds()
+    assert aged is not None and aged > 86400
+
+
+def test_session_ids_cached_matches_and_reuses_cache(tmp_path):
+    """Audit B-3: the SessionStart hook re-parsed the whole WAL every session.
+    Past-day ids come from a size-keyed sidecar; proof of reuse: swapping a
+    cached day's content for same-length junk doesn't change the answer."""
+    log = EventLog(root=tmp_path)
+    for sid in ("a", "b", "c"):
+        log.append(EventType.USER_PROMPT_SUBMIT, sid, {"text": f"event {sid}"})
+    assert log.session_ids_cached() == {"a", "b", "c"}  # builds the cache
+    wal = next(iter(log.events_dir.glob("*/events.jsonl")))
+    raw = wal.read_bytes()
+    wal.write_bytes(b"#" * len(raw))  # same size, unparseable content
+    assert log.session_ids_cached() == {"a", "b", "c"}  # cache hit, no re-parse
+    assert log.session_ids() == set()  # ground truth: the file is junk now
+
+
+def test_session_ids_for_days(tmp_path):
+    log = EventLog(root=tmp_path)
+    log.append(EventType.USER_PROMPT_SUBMIT, "s1", {"text": "x"})
+    day = next(iter(log.events_dir.iterdir())).name
+    assert log.session_ids_for_days([day]) == {"s1"}
+    assert log.session_ids_for_days(["1999-01-01"]) == set()

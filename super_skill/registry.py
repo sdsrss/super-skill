@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import os
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -213,11 +213,29 @@ class Registry:
             # rather than dying on a raw pydantic traceback (M12).
             raise RegistryError(f"{skill_id}: corrupt meta.json ({e})") from e
 
-    def list_skills(self) -> list[SkillRecord]:
+    def list_skills(
+        self, on_error: Callable[[str, RegistryError], None] | None = None
+    ) -> list[SkillRecord]:
+        """All readable skill records. A corrupt meta.json raises (strict) unless
+        ``on_error`` is given, in which case the skill is skipped and reported —
+        read-only surfaces (status/list/doctor) must degrade per-skill instead of
+        dying wholesale on one bad file (audit P1-5)."""
         if not self.skills_root.exists():
             return []
-        out = [self.get(d.name) for d in sorted(self.skills_root.iterdir()) if d.is_dir()]
-        return [r for r in out if r is not None]
+        out: list[SkillRecord] = []
+        for d in sorted(self.skills_root.iterdir()):
+            if not d.is_dir():
+                continue
+            try:
+                rec = self.get(d.name)
+            except RegistryError as e:
+                if on_error is None:
+                    raise
+                on_error(d.name, e)
+                continue
+            if rec is not None:
+                out.append(rec)
+        return out
 
     def version_text(self, skill_id: str, version: str) -> str:
         p = self.skills_root / skill_id / "versions" / version / "SKILL.md"

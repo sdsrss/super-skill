@@ -47,14 +47,27 @@ def check_registry(
     is the legacy single-host fallback used only for skills with no recorded hosts."""
     resolve_host = resolve_host or config.host_skills_dir
     issues: list[DoctorIssue] = []
-    for rec in reg.list_skills():
+    # A corrupt meta.json must become a reportable (and git-repairable) issue,
+    # not crash the integrity tool on the exact corruption it exists to
+    # diagnose (audit P1-5).
+    records = reg.list_skills(
+        on_error=lambda sid, e: issues.append(
+            DoctorIssue(sid, "error", f"corrupt meta.json ({e})", kind="meta_corrupt")
+        )
+    )
+    for rec in records:
         sid = rec.skill.skill_id
         active = rec.skill.active_version
 
         if active is not None and active not in rec.versions:
+            have = ", ".join(rec.versions) or "none"
             issues.append(
-                DoctorIssue(sid, "error", f"active pointer {active!r} not in versions",
-                            kind="dangling_active")
+                DoctorIssue(
+                    sid, "error",
+                    f"active pointer {active!r} not in versions (have: {have}) — "
+                    f"fix with `super-skill rollback {sid} --to <version>`",
+                    kind="dangling_active",
+                )
             )
 
         for ver, sv in rec.versions.items():
@@ -130,6 +143,15 @@ def repair(
     for issue in check_registry(reg, host_dir, resolve_host=resolve_host):
         if issue.kind in ("hash_mismatch", "file_missing") and issue.version is not None:
             rel = f"registry/skills/{issue.skill_id}/versions/{issue.version}/SKILL.md"
+            try:
+                reg.git("checkout", "HEAD", "--", rel)
+                actions.append(RepairAction(issue, f"restored {rel} from git HEAD", True))
+            except RegistryError as e:
+                actions.append(RepairAction(issue, f"git restore failed: {e}", False))
+        elif issue.kind == "meta_corrupt":
+            # meta.json is committed on every registry write — git HEAD holds
+            # the last good copy (audit P1-5).
+            rel = f"registry/skills/{issue.skill_id}/meta.json"
             try:
                 reg.git("checkout", "HEAD", "--", rel)
                 actions.append(RepairAction(issue, f"restored {rel} from git HEAD", True))

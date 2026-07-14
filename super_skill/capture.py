@@ -8,10 +8,13 @@ elsewhere.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
+import tempfile
+import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -109,6 +112,99 @@ class EventLog:
 
     def session_ids(self) -> set[str]:
         return {ev.session_id for ev in self.iter_events()}
+
+    def scan_stats(self) -> tuple[int, set[str]]:
+        """One pass over the WAL: (event_count, distinct session ids).
+
+        `status` used to pay two full scans (count + session_ids)."""
+        n = 0
+        sessions: set[str] = set()
+        for ev in self.iter_events():
+            n += 1
+            sessions.add(ev.session_id)
+        return n, sessions
+
+    def last_event_age_seconds(self) -> float | None:
+        """Seconds since the newest events.jsonl was written, or None when the
+        WAL is empty. mtime-based (O(day dirs)) — capture-liveness signal for
+        `status`; a silently-dead hook chain is otherwise invisible (audit B-1)."""
+        latest: float | None = None
+        if not self.events_dir.exists():
+            return None
+        for wal in self.events_dir.glob("*/events.jsonl"):
+            mtime = wal.stat().st_mtime
+            if latest is None or mtime > latest:
+                latest = mtime
+        if latest is None:
+            return None
+        return max(0.0, time.time() - latest)
+
+    def session_ids_for_days(self, days: Iterable[str]) -> set[str]:
+        """Distinct session ids appearing in the given day dirs only."""
+        out: set[str] = set()
+        for day in days:
+            wal = self.events_dir / day / "events.jsonl"
+            if wal.exists():
+                out |= self._parse_session_ids(wal)
+        return out
+
+    def _parse_session_ids(self, wal: Path) -> set[str]:
+        out: set[str] = set()
+        for line in wal.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                sid = json.loads(line).get("session_id")
+            except ValueError:
+                continue  # torn line — same tolerance as iter_events
+            if isinstance(sid, str):
+                out.add(sid)
+        return out
+
+    def session_ids_cached(self) -> set[str]:
+        """session_ids() with a size-keyed per-day sidecar cache.
+
+        The SessionStart reminder hook used to re-parse (and Pydantic-validate)
+        the entire WAL at every session opening — ~1.5s wall at a full 14-day
+        TTL (audit B-3). Day files are append-only, so a day whose events.jsonl
+        size is unchanged reuses its cached ids; anything else is re-parsed and
+        the cache refreshed. Best-effort: a corrupt/missing cache degrades to a
+        full parse, and cache write failures are swallowed."""
+        cache_path = self.root / "session_index.json"
+        try:
+            cache = json.loads(cache_path.read_text(encoding="utf-8"))
+            days_cache = cache["days"] if isinstance(cache.get("days"), dict) else {}
+        except (OSError, ValueError):
+            days_cache = {}
+        out: set[str] = set()
+        fresh: dict[str, dict[str, object]] = {}
+        if self.events_dir.exists():
+            for day in sorted(self.events_dir.iterdir()):
+                wal = day / "events.jsonl"
+                if not wal.exists():
+                    continue
+                size = wal.stat().st_size
+                cached = days_cache.get(day.name)
+                if (
+                    isinstance(cached, dict)
+                    and cached.get("size") == size
+                    and isinstance(cached.get("sessions"), list)
+                ):
+                    ids = {s for s in cached["sessions"] if isinstance(s, str)}
+                else:
+                    ids = self._parse_session_ids(wal)
+                fresh[day.name] = {"size": size, "sessions": sorted(ids)}
+                out |= ids
+        try:
+            fd, tmp = tempfile.mkstemp(dir=self.root, suffix=".tmp")
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump({"days": fresh}, f)
+            os.chmod(tmp, 0o600)  # session ids are session-derived state (P2-1)
+            os.replace(tmp, cache_path)
+        except OSError:
+            pass  # cache is an optimization, never a failure source
+        return out
 
     def distinct_sessions(self) -> int:
         return len(self.session_ids())
