@@ -91,9 +91,9 @@ The CLI speaks Codex natively via `--host codex` — `super-skill seed --host co
 | `materialize [id] --host claude\|codex\|all` | Distribute active skill(s) to Claude Code and/or Codex (the Codex Target Adapter). |
 | `doctor` / `doctor --fix` | Integrity check (hashes, active pointer, host sync); `--fix` restores git-recoverable versions and re-materializes drift, then re-verifies. |
 | `capture` | Append a host event to the redacted WAL — reads hook JSON on stdin, never fails the session. |
-| `mine` | Surface task families recurring across ≥3 distinct sessions; nudges you once enough new sessions accumulate. |
+| `mine` | Surface task families recurring across ≥3 distinct sessions (`status` and the SessionStart hook nudge you once enough new sessions accumulate). |
 | `prune [--days N] [--apply]` | Delete captured event days older than the TTL (FR-CAP-6); dry-run by default, `--apply` to delete. |
-| `candidate draft/show/approve/reject` | Turn a mined family into a skill: draft → review → two hard gates → promote & materialize. |
+| `candidate draft/show/approve/reject` | Turn a mined family into a skill: draft → review → three blocking checks (gate scan, placeholder check, eval-lite) → promote & materialize. |
 | `hooks-config` | Print the `settings.json` hooks block that wires session capture. |
 
 State lives in `~/.super-skill/` — a real git repository, so **audit and rollback
@@ -108,14 +108,14 @@ are git.**
 | Provenance / "why is this here" | ✗ | ✓ |
 | Tamper / drift detection | ✗ | ✓ (`doctor`) |
 | Secret redaction on capture | ✗ | ✓ (before disk) |
-| Safety-gated promotion | ✗ | ✓ (two hard gates) |
+| Safety-gated promotion | ✗ | ✓ (3 blocking checks) |
 | Claude Code **and** Codex | manual | ✓ one CLI |
 
 super-skill is a **package manager, not a skill generator**: it manages, versions,
 and audits the skills you already have or approve — it does not write skills for
 you or change their behavior behind your back. Every write path is explicit and
 reversible; your skills directory is only ever written on `approve`, `rollback`,
-or `doctor --fix` (`seed` reads it but never modifies it).
+`materialize`, or `doctor --fix` (`seed` reads it but never modifies it).
 
 ## Usage
 
@@ -149,6 +149,7 @@ super-skill candidate approve <id>
 | `SUPER_SKILL_HOST_SKILLS` | `~/.claude/skills` | Claude Code skills directory (`--host claude`). |
 | `SUPER_SKILL_CODEX_SKILLS` | `~/.agents/skills` | Codex skills directory (`--host codex`). |
 | `SUPER_SKILL_MINE_REMINDER` | `3` | Distinct unmined sessions before `status` nudges you to mine. |
+| `SUPER_SKILL_EVENT_TTL` | `14` | Days of raw captured events kept; `prune` deletes older event days (dry-run by default). |
 
 ## Scope
 
@@ -166,9 +167,9 @@ No. It manages the files (version, audit, rollback, integrity) and never edits a
 skill's content on its own. Approving a candidate promotes a draft *you* reviewed.
 
 **Will it touch `~/.claude/skills` without asking?**
-Three commands write there — `approve` (promote a reviewed candidate), `rollback`,
-and `doctor --fix`. `seed` reads your skills into the registry but never modifies
-them; `status`/`list`/`show`/`explain`/`doctor` are read-only.
+Four commands write there — `approve` (promote a reviewed candidate), `rollback`,
+`materialize`, and `doctor --fix`. `seed` reads your skills into the registry but
+never modifies them; `status`/`list`/`show`/`explain`/`doctor` are read-only.
 
 **Are my secrets safe in captured sessions?**
 Redaction runs *before* any write: secret values and private paths never reach the
@@ -180,8 +181,10 @@ The plugin calls the `super-skill` CLI on your PATH. Install it from PyPI:
 
 **Does it support Codex?**
 Yes — the same CLI plus a `codex/` install package for `~/.agents/skills`. The CLI
-has a Codex Target Adapter: `--host codex` (and `--host all`) on `seed`, `approve`,
-`rollback`, and `materialize` reads from and writes to Codex's `~/.agents/skills`.
+has a Codex Target Adapter: `--host codex` on `seed`, and `--host codex|all` on
+`approve`, `rollback`, and `materialize` (a plain `rollback` also re-syncs every
+host the skill was distributed to), reading from and writing to Codex's
+`~/.agents/skills`.
 The Codex package also ships an optional `agents/openai.yaml` host extension.
 
 ## Develop

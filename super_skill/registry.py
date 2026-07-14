@@ -117,6 +117,14 @@ class Registry:
     # ---- lifecycle ---------------------------------------------------------
     def init(self) -> None:
         with self._lock():  # serialize git-init + first commit against a concurrent init
+            if (self.root / ".git").exists() and not self._owns_git_history():
+                # Adopting a foreign repo would overwrite its .gitignore and
+                # `git add -A` commit the user's working tree (audit P0-1).
+                raise RegistryError(
+                    f"refusing to adopt existing git repository at {self.root}: "
+                    "its history was not created by super-skill. Point "
+                    "SUPER_SKILL_HOME at a dedicated directory."
+                )
             self.skills_root.mkdir(parents=True, exist_ok=True)
             if not (self.root / ".git").exists():
                 self._git("init", "-q")
@@ -128,6 +136,19 @@ class Registry:
                 gi.write_text(_GITIGNORE, encoding="utf-8")
             # Idempotent: no-op when nothing is staged (already-initialized re-run).
             self._commit("chore: initialize super-skill registry (.gitignore)")
+
+    def _owns_git_history(self) -> bool:
+        """True when the repo at root is empty (unborn HEAD) or its root commit
+        was written by Registry.init — the only histories init may adopt."""
+        try:
+            roots = self._git("rev-list", "--max-parents=0", "HEAD")
+        except RegistryError:
+            return True  # unborn HEAD: fresh `git init`, nothing to clobber
+        for commit in roots.splitlines():
+            subject = self._git("log", "-1", "--format=%s", commit.strip())
+            if subject.startswith("chore: initialize super-skill registry"):
+                return True
+        return False
 
     def _git(self, *args: str) -> str:
         proc = subprocess.run(
