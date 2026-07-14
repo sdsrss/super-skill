@@ -3,12 +3,20 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic versioning.
 
-## [Unreleased]
+## [0.15.0] - 2026-07-14
+
+The tail of the v0.14.0 UX audit: the last three open findings plus the
+release-checklist discoverability item. Tests 268 → 271; `ruff` and
+`mypy --strict` clean.
 
 ### Added
 - `seed --host all` imports from every host (claude + codex) in one run, with a
   per-host `seed[<host>]:` summary line — seed was the one multi-host command
   that still rejected `all`.
+- `status` shows a `backlog :` line when unmined sessions exist but sit below
+  the reminder threshold, naming the threshold and `SUPER_SKILL_MINE_REMINDER`
+  — so the quieter v0.14 default (3 → 20) reads as a setting, not a broken
+  reminder. Stateless; `status` stays read-only.
 
 ### Changed
 - `prune --apply` deletes exactly the day set the dry-run listed (and its

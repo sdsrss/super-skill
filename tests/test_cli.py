@@ -1018,3 +1018,24 @@ def test_seed_host_all_imports_both_hosts(env, tmp_path):
     assert "claude" in r.stdout and "codex" in r.stdout
     r = runner.invoke(app, ["list"])
     assert "alpha" in r.stdout and "beta" in r.stdout
+
+
+def test_status_shows_below_threshold_backlog(env, monkeypatch):
+    """Released-artifact discoverability (v0.14 threshold change): a backlog
+    that would have nudged at the old default must still be VISIBLE in status,
+    with the env knob named — silence made 3->20 look like a broken reminder."""
+    monkeypatch.setenv("SUPER_SKILL_MINE_REMINDER", "20")
+    _capture_sessions(5)
+    r = runner.invoke(app, ["status"])
+    assert r.exit_code == 0, r.output
+    assert "5 unmined" in r.stdout
+    assert "below the reminder threshold (20" in r.stdout
+    assert "SUPER_SKILL_MINE_REMINDER" in r.stdout
+    # at/above threshold the actionable nudge replaces the informational line
+    monkeypatch.setenv("SUPER_SKILL_MINE_REMINDER", "5")
+    r = runner.invoke(app, ["status"])
+    assert "run `super-skill mine`" in r.stdout
+    # zero backlog stays silent
+    runner.invoke(app, ["mine"])
+    r = runner.invoke(app, ["status"])
+    assert "unmined" not in r.stdout

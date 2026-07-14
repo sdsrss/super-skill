@@ -315,6 +315,15 @@ def status() -> None:
     if minestate.reminder_due(unmined):
         typer.echo(f"reminder   : {unmined} distinct sessions unmined "
                    f"— run `super-skill mine`")
+    elif unmined > 0:
+        # Discoverability for the 3->20 default change (v0.14): a backlog that
+        # no longer nudges must still be visible, or the quieter default reads
+        # as a broken reminder. Stateless — status stays read-only.
+        typer.echo(
+            f"backlog    : {unmined} unmined session(s), below the reminder "
+            f"threshold ({minestate.reminder_threshold()}; "
+            f"env SUPER_SKILL_MINE_REMINDER)"
+        )
 
 
 def _warn_corrupt_meta(skill_id: str, e: RegistryError) -> None:
