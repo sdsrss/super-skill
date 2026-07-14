@@ -59,29 +59,32 @@ def _short(text: str, n: int = 60) -> str:
 @app.command()
 def seed(host: str = typer.Option("claude", "--host", help="source host: claude | codex")) -> None:
     """Import existing host skills into the registry (idempotent, read-only on host)."""
-    if host not in config.HOSTS:
-        typer.echo(f"unknown host {host!r} (expected: {', '.join(config.HOSTS)})", err=True)
-        raise typer.Exit(1)
-    reg = _registry()
-    src = config.host_skills_dir(host)
-    if not src.exists():
-        # all-zero output from a typo'd dir is indistinguishable from an empty
-        # host (audit P3-16) — say which path was looked at.
-        typer.echo(f"warning: host skills dir does not exist: {src}", err=True)
     try:
-        report = seed_from_host(reg, src)
-    except RegistryError as e:
-        # e.g. the foreign-git-adoption refusal (audit P0-1) — a guard message,
-        # not a crash: no raw traceback (M12).
+        hosts = config.resolve_hosts(host)  # claude | codex | all (audit P3-18)
+    except ValueError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(1) from e
-    typer.echo(
-        f"seed: {len(report.imported)} imported, {len(report.updated)} updated, "
-        f"{len(report.unchanged)} unchanged, {len(report.skipped)} skipped "
-        f"(host={src})"
-    )
-    for name, reason in report.skipped:
-        typer.echo(f"  skipped {name}: {reason}")
+    reg = _registry()
+    for h in hosts:
+        src = config.host_skills_dir(h)
+        if not src.exists():
+            # all-zero output from a typo'd dir is indistinguishable from an
+            # empty host (audit P3-16) — say which path was looked at.
+            typer.echo(f"warning: host skills dir does not exist: {src}", err=True)
+        try:
+            report = seed_from_host(reg, src)
+        except RegistryError as e:
+            # e.g. the foreign-git-adoption refusal (audit P0-1) — a guard
+            # message, not a crash: no raw traceback (M12).
+            typer.echo(str(e), err=True)
+            raise typer.Exit(1) from e
+        typer.echo(
+            f"seed[{h}]: {len(report.imported)} imported, {len(report.updated)} updated, "
+            f"{len(report.unchanged)} unchanged, {len(report.skipped)} skipped "
+            f"(host={src})"
+        )
+        for name, reason in report.skipped:
+            typer.echo(f"  skipped {name}: {reason}")
 
 
 @app.command()
@@ -276,7 +279,10 @@ def prune(
             err=True,
         )
     if apply:
-        log.prune(days=ttl, apply=True)
+        # Delete exactly what was listed and warned about above — recomputing
+        # staleness here could pick up a day that crossed the TTL boundary
+        # after the dry-run (midnight TOCTOU).
+        log.delete_days(stale)
     verb = "pruned" if apply else "would prune (dry-run — pass --apply to delete)"
     typer.echo(f"{verb} {len(stale)} day(s): {', '.join(stale)}")
 

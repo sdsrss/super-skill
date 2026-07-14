@@ -181,10 +181,9 @@ The plugin calls the `super-skill` CLI on your PATH. Install it from PyPI:
 
 **Does it support Codex?**
 Yes — the same CLI plus a `codex/` install package for `~/.agents/skills`. The CLI
-has a Codex Target Adapter: `--host codex` on `seed`, and `--host codex|all` on
-`approve`, `rollback`, and `materialize` (a plain `rollback` also re-syncs every
-host the skill was distributed to), reading from and writing to Codex's
-`~/.agents/skills`.
+has a Codex Target Adapter: `--host codex|all` on `seed`, `approve`, `rollback`,
+and `materialize` (a plain `rollback` also re-syncs every host the skill was
+distributed to), reading from and writing to Codex's `~/.agents/skills`.
 The Codex package also ships an optional `agents/openai.yaml` host extension.
 
 ## Develop

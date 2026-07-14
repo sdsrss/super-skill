@@ -156,8 +156,8 @@ super-skill 刻意停在**包管理器**形态(里程碑 M0 + WS)。自学习闭
 
 **支持 Codex 吗?**
 支持——同一个 CLI 加一个面向 `~/.agents/skills` 的 `codex/` 安装包。CLI 已内置 Codex Target
-Adapter:`seed` 支持 `--host codex`;`approve`、`rollback`、`materialize` 支持
-`--host codex|all`(不带参数的 `rollback` 还会自动重同步该技能分发过的每个宿主),从
+Adapter:`seed`、`approve`、`rollback`、`materialize` 均支持 `--host codex|all`
+(不带参数的 `rollback` 还会自动重同步该技能分发过的每个宿主),从
 Codex 的 `~/.agents/skills` 读取并写入。Codex 包还附带一个可选的 `agents/openai.yaml` 宿主扩展。
 
 ## 开发

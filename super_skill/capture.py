@@ -217,6 +217,21 @@ class EventLog:
     def distinct_sessions(self) -> int:
         return len(self.session_ids())
 
+    def delete_days(self, days: Iterable[str]) -> list[str]:
+        """Delete exactly the named day dirs (date-named only); returns those
+        actually deleted. Lets `prune --apply` remove the set the dry-run
+        listed and warned about, instead of recomputing staleness and possibly
+        deleting a day the user never saw (midnight TOCTOU)."""
+        deleted: list[str] = []
+        for name in days:
+            if _parse_day(name) is None:
+                continue  # never delete a non-date dir, same rule as prune
+            target = self.events_dir / name
+            if target.is_dir():
+                shutil.rmtree(target)
+                deleted.append(name)
+        return deleted
+
     def disk_usage(self) -> tuple[int, int]:
         """Return (total_bytes, day_dir_count) of the on-disk WAL — read-only.
 

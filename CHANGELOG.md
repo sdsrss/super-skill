@@ -3,6 +3,21 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic versioning.
 
+## [Unreleased]
+
+### Added
+- `seed --host all` imports from every host (claude + codex) in one run, with a
+  per-host `seed[<host>]:` summary line — seed was the one multi-host command
+  that still rejected `all`.
+
+### Changed
+- `prune --apply` deletes exactly the day set the dry-run listed (and its
+  never-mined warning covered) instead of recomputing staleness at delete
+  time, closing a midnight-crossing window where an unlisted day could be
+  removed.
+- The sdist no longer packages `evals/` (GATE-2 fixtures with deliberately
+  broken code and an `example.env` placeholder); the wheel was already clean.
+
 ## [0.14.0] - 2026-07-13
 
 A UX and robustness release driven by a three-lens audit (CLI surface,

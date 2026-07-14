@@ -1005,3 +1005,16 @@ def test_seed_foreign_git_refusal_is_clean(env, monkeypatch, tmp_path):
     assert r.exit_code == 1
     assert r.exception is None or isinstance(r.exception, SystemExit)
     assert "refusing to adopt" in r.output
+
+
+def test_seed_host_all_imports_both_hosts(env, tmp_path):
+    """Audit P3-18: seed --host all used to be rejected while every other
+    multi-host command accepted `all` — now it seeds claude and codex in turn."""
+    _make_skill(env, "alpha", "claude skill")
+    codex = tmp_path / "codex"
+    _make_skill(codex, "beta", "codex skill")
+    r = runner.invoke(app, ["seed", "--host", "all"])
+    assert r.exit_code == 0, r.output
+    assert "claude" in r.stdout and "codex" in r.stdout
+    r = runner.invoke(app, ["list"])
+    assert "alpha" in r.stdout and "beta" in r.stdout

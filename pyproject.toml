@@ -43,6 +43,11 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["super_skill"]
 
+[tool.hatch.build.targets.sdist]
+# GATE-2 eval fixtures (incl. deliberately-broken code and an example.env
+# placeholder) are repo material, not distribution material.
+exclude = ["evals/"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"

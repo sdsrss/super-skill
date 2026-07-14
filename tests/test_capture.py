@@ -357,3 +357,19 @@ def test_session_ids_for_days(tmp_path):
     day = next(iter(log.events_dir.iterdir())).name
     assert log.session_ids_for_days([day]) == {"s1"}
     assert log.session_ids_for_days(["1999-01-01"]) == set()
+
+
+def test_delete_days_deletes_exactly_named_days(tmp_path):
+    """Prune TOCTOU (audit nit): apply must delete exactly the days the dry-run
+    listed (and warned about), not a recomputed set that may have gained a day
+    across midnight. Non-date names are refused."""
+    log = EventLog(root=tmp_path)
+    for day in ("2020-01-01", "2020-01-02", "not-a-date"):
+        d = log.events_dir / day
+        d.mkdir(parents=True)
+        (d / "events.jsonl").write_text('{"x":1}\n', encoding="utf-8")
+    deleted = log.delete_days(["2020-01-01", "1999-12-31", "not-a-date"])
+    assert deleted == ["2020-01-01"]  # missing + non-date silently skipped
+    assert not (log.events_dir / "2020-01-01").exists()
+    assert (log.events_dir / "2020-01-02").exists()
+    assert (log.events_dir / "not-a-date").exists()
